@@ -1,0 +1,211 @@
+<!-- Add this to your assignment_complete.html template -->
+
+<!-- Compilation Section - Add before Submit Section -->
+<div class="section">
+    <h2 class="section-title">Test Compilation</h2>
+    <p style="margin-bottom: 15px; color: #666;">
+        Test your code compilation before submitting. This will check for syntax errors and compilation issues.
+    </p>
+    
+    <div id="compile-section">
+        <button id="compile-btn" class="btn btn-secondary">
+            🔨 Test Compilation
+        </button>
+        
+        <div id="compile-status" style="display: none; margin-top: 15px;">
+            <!-- Queue position display -->
+            <div id="queue-info" style="display: none; padding: 12px; background: #e3f2fd; border-radius: 4px; margin-bottom: 10px;">
+                <div style="font-weight: 600;">⏳ In Queue</div>
+                <div id="queue-position"></div>
+                <div id="queue-eta" style="font-size: 12px; color: #666;"></div>
+                <button id="cancel-compile-btn" class="btn btn-warning" style="margin-top: 8px;">
+                    Cancel
+                </button>
+            </div>
+            
+            <!-- Compiling display -->
+            <div id="compiling-info" style="display: none; padding: 12px; background: #fff3cd; border-radius: 4px; margin-bottom: 10px;">
+                <div style="font-weight: 600;">⚙️ Compiling...</div>
+                <div style="font-size: 12px; color: #666;">This usually takes 5-10 seconds</div>
+            </div>
+            
+            <!-- Results display -->
+            <div id="compile-results" style="display: none;">
+                <div id="compile-success" style="display: none; padding: 12px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 10px;">
+                    <div style="font-weight: 600; color: #155724;">✓ Compilation Successful!</div>
+                    <div style="font-size: 12px; color: #155724;">Your code compiled without errors.</div>
+                </div>
+                
+                <div id="compile-error" style="display: none; padding: 12px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 10px;">
+                    <div style="font-weight: 600; color: #721c24;">✗ Compilation Failed</div>
+                    <div style="font-size: 12px; color: #721c24;">See errors below:</div>
+                </div>
+                
+                <div id="compile-output" style="margin-top: 10px;">
+                    <pre style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow-x: auto; max-height: 400px;"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Compilation handling
+(function() {
+    const assignmentId = '{{ assignment_id }}';
+    let currentJobId = null;
+    let statusCheckInterval = null;
+    
+    const compileBtn = document.getElementById('compile-btn');
+    const compileStatus = document.getElementById('compile-status');
+    const queueInfo = document.getElementById('queue-info');
+    const compilingInfo = document.getElementById('compiling-info');
+    const compileResults = document.getElementById('compile-results');
+    const cancelBtn = document.getElementById('cancel-compile-btn');
+    
+    // Start compilation
+    compileBtn.addEventListener('click', async () => {
+        compileBtn.disabled = true;
+        compileBtn.textContent = 'Starting...';
+        compileStatus.style.display = 'block';
+        hideAllStatus();
+        
+        try {
+            const response = await fetch(`/compile/${assignmentId}`, {
+                method: 'POST'
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                currentJobId = data.job_id;
+                startStatusCheck();
+            } else {
+                showMessage(data.error || 'Failed to start compilation', 'error');
+                resetCompileButton();
+            }
+        } catch (error) {
+            showMessage('Error starting compilation: ' + error.message, 'error');
+            resetCompileButton();
+        }
+    });
+    
+    // Cancel compilation
+    cancelBtn.addEventListener('click', async () => {
+        if (!currentJobId) return;
+        
+        if (!confirm('Cancel this compilation job?')) return;
+        
+        try {
+            const response = await fetch(`/compile-cancel/${currentJobId}`, {
+                method: 'POST'
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                showMessage('Compilation cancelled', 'success');
+                stopStatusCheck();
+                resetCompileButton();
+            } else {
+                showMessage(data.error || 'Failed to cancel', 'error');
+            }
+        } catch (error) {
+            showMessage('Error cancelling: ' + error.message, 'error');
+        }
+    });
+    
+    // Check compilation status
+    function startStatusCheck() {
+        statusCheckInterval = setInterval(checkStatus, 1000);  // Check every second
+        checkStatus();  // Check immediately
+    }
+    
+    function stopStatusCheck() {
+        if (statusCheckInterval) {
+            clearInterval(statusCheckInterval);
+            statusCheckInterval = null;
+        }
+    }
+    
+    async function checkStatus() {
+        if (!currentJobId) return;
+        
+        try {
+            const response = await fetch(`/compile-status/${currentJobId}`);
+            const status = await response.json();
+            
+            if (status.status === 'queued') {
+                showQueueStatus(status);
+            } else if (status.status === 'compiling') {
+                showCompilingStatus();
+            } else if (status.status === 'complete' || status.status === 'failed') {
+                stopStatusCheck();
+                showResults(status);
+                resetCompileButton();
+            } else if (status.status === 'cancelled') {
+                stopStatusCheck();
+                showMessage('Compilation was cancelled', 'success');
+                resetCompileButton();
+            }
+        } catch (error) {
+            console.error('Error checking status:', error);
+        }
+    }
+    
+    function hideAllStatus() {
+        queueInfo.style.display = 'none';
+        compilingInfo.style.display = 'none';
+        compileResults.style.display = 'none';
+        document.getElementById('compile-success').style.display = 'none';
+        document.getElementById('compile-error').style.display = 'none';
+    }
+    
+    function showQueueStatus(status) {
+        hideAllStatus();
+        queueInfo.style.display = 'block';
+        
+        const position = status.position || 0;
+        const eta = status.estimated_wait || 0;
+        
+        document.getElementById('queue-position').textContent = 
+            `Position in queue: #${position}`;
+        
+        if (eta > 0) {
+            document.getElementById('queue-eta').textContent = 
+                `Estimated wait: ${Math.ceil(eta)} seconds`;
+        } else {
+            document.getElementById('queue-eta').textContent = 
+                'Starting soon...';
+        }
+    }
+    
+    function showCompilingStatus() {
+        hideAllStatus();
+        compilingInfo.style.display = 'block';
+    }
+    
+    function showResults(status) {
+        hideAllStatus();
+        compileResults.style.display = 'block';
+        
+        const result = status.result;
+        
+        if (result.success) {
+            document.getElementById('compile-success').style.display = 'block';
+            const output = result.stdout || 'Compilation completed successfully.';
+            document.querySelector('#compile-output pre').textContent = output;
+        } else {
+            document.getElementById('compile-error').style.display = 'block';
+            const output = result.stderr || result.error || 'Unknown error';
+            document.querySelector('#compile-output pre').textContent = output;
+        }
+    }
+    
+    function resetCompileButton() {
+        compileBtn.disabled = false;
+        compileBtn.textContent = '🔨 Test Compilation';
+        currentJobId = null;
+    }
+})();
+</script>

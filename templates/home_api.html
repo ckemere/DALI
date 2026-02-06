@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Assignment</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .header {
+            background: white;
+            padding: 20px 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 24px;
+        }
+        
+        .user-info {
+            text-align: right;
+        }
+        
+        .student-name {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .logout-link {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 13px;
+        }
+        
+        .logout-link:hover {
+            text-decoration: underline;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .assignments-section {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .section-title {
+            color: #333;
+            font-size: 20px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .assignment-list {
+            display: grid;
+            gap: 15px;
+        }
+        
+        .assignment-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            transition: all 0.2s;
+            cursor: pointer;
+            text-decoration: none;
+            display: block;
+            color: inherit;
+        }
+        
+        .assignment-card:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+        }
+        
+        .assignment-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        
+        .assignment-meta {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .due-soon {
+            color: #ff6b6b;
+            font-weight: 600;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Lab Submission System</h1>
+            <div class="user-info">
+                <div class="student-name">{{ student_name }}</div>
+                <a href="/logout" class="logout-link">Logout</a>
+            </div>
+        </div>
+        
+        <div class="assignments-section">
+            <h2 class="section-title">Select an Assignment</h2>
+            
+            {% if assignments %}
+            <div class="assignment-list">
+                {% for assignment in assignments %}
+                <a href="/assignment/{{ assignment.id }}" class="assignment-card">
+                    <div class="assignment-name">{{ assignment.name }}</div>
+                    <div class="assignment-meta">
+                        <div class="meta-item">
+                            📋 {{ assignment.points_possible|default(0) }} points
+                        </div>
+                        {% if assignment.due_at %}
+                        <div class="meta-item">
+                            📅 Due: {{ assignment.due_at[:10] }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-state-icon">📝</div>
+                <p>No assignments found for this course.</p>
+                <p style="font-size: 12px; margin-top: 10px;">Check that the COURSE_ID is set correctly in app_api.py</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

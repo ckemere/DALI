@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ assignment_title }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        
+        header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header-left h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        .user-info { color: #666; font-size: 14px; }
+        .back-link { color: #667eea; text-decoration: none; font-size: 14px; }
+        .back-link:hover { text-decoration: underline; }
+        
+        .section {
+            margin-bottom: 30px;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+        
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background-color: #fafafa;
+            transition: all 0.2s;
+        }
+        
+        .file-item:hover {
+            background-color: #f0f0f0;
+        }
+        
+        .file-item.uploaded {
+            background-color: #e8f5e9;
+            border-color: #4caf50;
+        }
+        
+        .file-status {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-size: 20px;
+        }
+        
+        .file-status.default {
+            background-color: #e0e0e0;
+            color: #999;
+        }
+        
+        .file-status.uploaded {
+            background-color: #4caf50;
+            color: white;
+        }
+        
+        .file-info {
+            flex-grow: 1;
+        }
+        
+        .file-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        
+        .file-details {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .file-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        button, .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background-color: #2196F3;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #1976D2;
+        }
+        
+        .btn-secondary {
+            background-color: #f5f5f5;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+        
+        .btn-secondary:hover {
+            background-color: #e0e0e0;
+        }
+        
+        .btn-warning {
+            background-color: #ff9800;
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background-color: #f57c00;
+        }
+        
+        .btn-success {
+            background-color: #4caf50;
+            color: white;
+            font-size: 16px;
+            padding: 12px 30px;
+        }
+        
+        .btn-success:hover {
+            background-color: #45a049;
+        }
+        
+        .btn-success:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .submit-section {
+            text-align: center;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+        
+        .message {
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .message.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .upload-label {
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <h1>{{ assignment_title }}</h1>
+                <div class="user-info">Student: {{ student_name }}</div>
+            </div>
+            <a href="/" class="back-link">← Back to Assignments</a>
+        </header>
+        
+        <div id="message" class="message"></div>
+        
+        <!-- Code Files Section -->
+        <div class="section">
+            <h2 class="section-title">Code Files</h2>
+            
+            {% for filename in code_files %}
+            <div class="file-item {% if uploaded_files[filename]['uploaded'] %}uploaded{% endif %}" 
+                 data-filename="{{ filename }}">
+                <div class="file-status {% if uploaded_files[filename]['uploaded'] %}uploaded{% else %}default{% endif %}">
+                    {% if uploaded_files[filename]['uploaded'] %}
+                        ✓
+                    {% else %}
+                        📄
+                    {% endif %}
+                </div>
+                
+                <div class="file-info">
+                    <div class="file-name">{{ filename }}</div>
+                    <div class="file-details">
+                        {% if uploaded_files[filename]['uploaded'] %}
+                            Uploaded • {{ uploaded_files[filename]['size'] }} bytes • {{ uploaded_files[filename]['modified'] }}
+                        {% else %}
+                            Using template default
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div class="file-actions">
+                    {% if uploaded_files[filename]['uploaded'] %}
+                        <a href="/view/{{ assignment_id }}/{{ filename }}" target="_blank" class="btn btn-secondary">View My Code</a>
+                        <button class="btn btn-warning revert-btn" data-filename="{{ filename }}">🔄 Revert</button>
+                    {% else %}
+                        <a href="/view-template/{{ lab_name }}/{{ filename }}" target="_blank" class="btn btn-secondary">View Template</a>
+                    {% endif %}
+                    
+                    <label for="file-{{ filename }}" class="btn btn-primary upload-label">
+                        {% if uploaded_files[filename]['uploaded'] %}Replace{% else %}Upload{% endif %}
+                    </label>
+                    <input type="file" 
+                           id="file-{{ filename }}" 
+                           class="file-input" 
+                           accept=".c,.h"
+                           data-filename="{{ filename }}">
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- Writeup Section -->
+        <div class="section">
+            <h2 class="section-title">Writeup (Choose TXT or PDF)</h2>
+            
+            {% for filename in writeup_files %}
+            {% if filename in uploaded_files and uploaded_files[filename]['uploaded'] %}
+            <div class="file-item uploaded" data-filename="{{ filename }}">
+                <div class="file-status uploaded">✓</div>
+                
+                <div class="file-info">
+                    <div class="file-name">{{ filename }}</div>
+                    <div class="file-details">
+                        Uploaded • {{ uploaded_files[filename]['size'] }} bytes • {{ uploaded_files[filename]['modified'] }}
+                    </div>
+                </div>
+                
+                <div class="file-actions">
+                    <label for="file-{{ filename }}" class="btn btn-primary upload-label">
+                        Replace
+                    </label>
+                    <input type="file" 
+                           id="file-{{ filename }}" 
+                           class="file-input" 
+                           accept=".txt,.pdf"
+                           data-filename="{{ filename }}">
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+            
+            {% set writeup_uploaded = namespace(value=False) %}
+            {% for filename in writeup_files %}
+                {% if filename in uploaded_files and uploaded_files[filename]['uploaded'] %}
+                    {% set writeup_uploaded.value = True %}
+                {% endif %}
+            {% endfor %}
+            
+            {% if not writeup_uploaded.value %}
+            <div class="file-item" data-filename="writeup">
+                <div class="file-status default">📝</div>
+                
+                <div class="file-info">
+                    <div class="file-name">No writeup uploaded yet</div>
+                    <div class="file-details">Upload either a .txt or .pdf file</div>
+                </div>
+                
+                <div class="file-actions">
+                    {% for filename in writeup_files %}
+                    <label for="file-{{ filename }}" class="btn btn-primary upload-label">
+                        Upload {{ filename.split('.')[-1].upper() }}
+                    </label>
+                    <input type="file" 
+                           id="file-{{ filename }}" 
+                           class="file-input" 
+                           accept=".{{ filename.split('.')[-1] }}"
+                           data-filename="{{ filename }}">
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="submit-section">
+            <p style="margin-bottom: 15px; color: #666;">
+                Ready to submit? This will create a zip file with all your code (uploaded + templates) and your writeup, then upload it to Canvas.
+            </p>
+            <button id="submit-btn" class="btn btn-success">Submit to Canvas</button>
+        </div>
+    </div>
+    
+    <script>
+        const assignmentId = '{{ assignment_id }}';
+        
+        // Handle file uploads
+        document.querySelectorAll('.file-input').forEach(input => {
+            input.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                const filename = e.target.dataset.filename;
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                showMessage('Uploading...', 'success');
+                
+                try {
+                    const response = await fetch(`/upload/${assignmentId}/${filename}`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        showMessage('File uploaded successfully!', 'success');
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        showMessage(result.error || 'Upload failed', 'error');
+                    }
+                } catch (error) {
+                    showMessage('Upload failed: ' + error.message, 'error');
+                }
+            });
+        });
+        
+        // Handle revert to template
+        document.querySelectorAll('.revert-btn').forEach(button => {
+            button.addEventListener('click', async (e) => {
+                const filename = e.target.dataset.filename;
+                
+                if (!confirm(`Are you sure you want to revert ${filename} to the template version? Your uploaded code will be deleted.`)) {
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`/revert/${assignmentId}/${filename}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        showMessage(result.message, 'success');
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        showMessage(result.error || 'Revert failed', 'error');
+                    }
+                } catch (error) {
+                    showMessage('Revert failed: ' + error.message, 'error');
+                }
+            });
+        });
+        
+        // Handle submission
+        document.getElementById('submit-btn').addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to submit? This will upload a zip file with all your code and writeup to Canvas.')) {
+                return;
+            }
+            
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Submitting...';
+            
+            try {
+                const response = await fetch(`/submit/${assignmentId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showMessage(result.message, 'success');
+                    submitBtn.textContent = 'Submitted ✓';
+                } else {
+                    showMessage(result.error || 'Submission failed', 'error');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit to Canvas';
+                }
+            } catch (error) {
+                showMessage('Submission failed: ' + error.message, 'error');
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Submit to Canvas';
+            }
+        });
+        
+        function showMessage(text, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.textContent = text;
+            messageDiv.className = 'message ' + type;
+            messageDiv.style.display = 'block';
+            
+            if (type === 'success' && !text.includes('...')) {
+                setTimeout(() => {
+                    messageDiv.style.display = 'none';
+                }, 5000);
+            }
+        }
+    </script>
+</body>
+</html>
