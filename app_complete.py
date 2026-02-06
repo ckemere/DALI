@@ -35,7 +35,7 @@ ADMIN_PASSWORD = require_env("ADMIN_PASSWORD")
 CANVAS_BASE_URL = os.environ.get("CANVAS_BASE_URL", "https://canvas.rice.edu")
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
-GRADEBOOK_CSV_PATH = os.environ.get("GRADEBOOK_CSV_PATH", "gradebook.csv")
+ROSTER_CSV_PATH = os.environ.get("ROSTER_CSV_PATH", "student_passwords.csv")
 
 UPLOAD_FOLDER = "uploads"
 TEMPLATE_FOLDER = "template_files"
@@ -75,7 +75,7 @@ def load_roster(csv_path):
     logging.info("Loaded %d students from %s", len(STUDENT_ROSTER), csv_path)
     return len(STUDENT_ROSTER)
 
-load_roster(GRADEBOOK_CSV_PATH)
+load_roster(ROSTER_CSV_PATH)
 
 
 def authenticate_student(netid, password):
@@ -676,7 +676,7 @@ def admin_reload_roster():
     if not session.get("admin_authenticated"):
         return jsonify(error="Not authenticated"), 403
 
-    count = load_roster(GRADEBOOK_CSV_PATH)
+    count = load_roster(ROSTER_CSV_PATH)
     return jsonify(success=True, students_loaded=count)
 
 # =============================================================================
