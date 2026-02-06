@@ -59,7 +59,8 @@ logging.basicConfig(
 # =============================================================================
 
 LAB_CONFIGS = {
-    "lab3": {
+    "505415": {   # Canvas assignment ID
+        "display_name": "Lab 3",
         "template_dir": "lab3",
         "code_files": [
             "hw_interface.c",
@@ -70,8 +71,9 @@ LAB_CONFIGS = {
             "state_machine_logic.h",
         ],
         "writeup_files": ["writeup.txt", "writeup.pdf"],
-    }
+    },
 }
+
 
 # =============================================================================
 # QUEUE CLIENT (NO WORKERS HERE)
@@ -96,6 +98,9 @@ def get_submission_folder(student_id, assignment_id):
 
 def get_template_file_path(lab_name, filename):
     return os.path.join(TEMPLATE_FOLDER, lab_name, filename)
+
+def get_lab_config_by_assignment_id(assignment_id):
+    return LAB_CONFIGS.get(str(assignment_id))
 
 def get_lab_config(assignment_name):
     key = assignment_name.lower().replace(" ", "")
@@ -159,14 +164,17 @@ def assignment(assignment_id):
         return redirect(url_for("login"))
 
     assignment_data = canvas_api_request(f"courses/{COURSE_ID}/assignments/{assignment_id}")
-    lab = get_lab_config(assignment_data["name"])
+    lab = get_lab_config_by_assignment_id(assignment_id)
 
     if not lab:
         flash("No lab configuration found")
         return redirect(url_for("home"))
 
     folder = get_submission_folder(session["student_id"], assignment_id)
-    files = {f: os.path.exists(os.path.join(folder, f)) for f in lab["code_files"]}
+    files = {
+        f: os.path.exists(os.path.join(folder, f))
+        for f in lab["code_files"]
+    }
 
     return render_template(
         "assignment_api.html",
@@ -187,7 +195,9 @@ def compile_start(assignment_id):
         return jsonify(error="Compilation unavailable"), 503
 
     assignment = canvas_api_request(f"courses/{COURSE_ID}/assignments/{assignment_id}")
-    lab = get_lab_config(assignment["name"])
+    lab = get_lab_config_by_assignment_id(assignment_id)
+    if not lab:
+        return jsonify(error="No lab configuration found"), 400
 
     job_id = compile_queue.submit_job(
         student_id=session["student_id"],
@@ -195,7 +205,7 @@ def compile_start(assignment_id):
         assignment_id=assignment_id,
         assignment_name=assignment["name"],
         lab_config=lab,
-        lab_name=assignment["name"].lower().replace(" ", ""),
+        lab_name=lab["template_dir"],
     )
 
     return jsonify(success=True, job_id=job_id)
