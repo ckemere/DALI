@@ -6,13 +6,13 @@
     <title>{{ assignment_title }}</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background-color: #f5f5f5;
             padding: 20px;
         }
-        
+
         .container {
             max-width: 1000px;
             margin: 0 auto;
@@ -21,7 +21,7 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             padding: 30px;
         }
-        
+
         header {
             margin-bottom: 30px;
             padding-bottom: 20px;
@@ -30,28 +30,16 @@
             justify-content: space-between;
             align-items: center;
         }
-        
-        .header-left h1 {
-            color: #333;
-            font-size: 24px;
-            margin-bottom: 10px;
-        }
-        
+
+        .header-left h1 { color: #333; font-size: 24px; margin-bottom: 10px; }
         .user-info { color: #666; font-size: 14px; }
         .back-link { color: #667eea; text-decoration: none; font-size: 14px; }
         .back-link:hover { text-decoration: underline; }
-        
-        .section {
-            margin-bottom: 30px;
-        }
-        
-        .section-title {
-            font-size: 18px;
-            color: #333;
-            margin-bottom: 15px;
-            font-weight: 600;
-        }
-        
+
+        .section { margin-bottom: 30px; }
+        .section-title { font-size: 18px; color: #333; margin-bottom: 15px; font-weight: 600; }
+        .section-subtitle { font-size: 13px; color: #888; margin-bottom: 12px; }
+
         .file-item {
             display: flex;
             align-items: center;
@@ -62,217 +50,93 @@
             background-color: #fafafa;
             transition: all 0.2s;
         }
-        
-        .file-item:hover {
-            background-color: #f0f0f0;
-        }
-        
-        .file-item.uploaded {
-            background-color: #e8f5e9;
-            border-color: #4caf50;
-        }
-        
-        .file-status {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 15px;
-            font-size: 20px;
-        }
-        
-        .file-status.default {
-            background-color: #e0e0e0;
-            color: #999;
-        }
-        
-        .file-status.uploaded {
-            background-color: #4caf50;
-            color: white;
-        }
-        
-        .file-info {
-            flex-grow: 1;
-        }
-        
-        .file-name {
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 4px;
-        }
-        
-        .file-details {
-            font-size: 12px;
-            color: #666;
-        }
-        
-        .file-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        button, .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            transition: all 0.2s;
-            text-decoration: none;
-            display: inline-block;
-        }
-        
-        .btn-primary {
-            background-color: #2196F3;
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background-color: #1976D2;
-        }
-        
-        .btn-secondary {
+        .file-item:hover { background-color: #f0f0f0; }
+        .file-item.uploaded { background-color: #e8f5e9; border-color: #4caf50; }
+        .file-item.excluded {
             background-color: #f5f5f5;
-            color: #333;
-            border: 1px solid #ddd;
+            border-color: #ccc;
+            opacity: 0.65;
         }
-        
-        .btn-secondary:hover {
-            background-color: #e0e0e0;
-        }
-        
-        .btn-warning {
-            background-color: #ff9800;
-            color: white;
-        }
-        
-        .btn-warning:hover {
-            background-color: #f57c00;
-        }
-        
-        .btn-compile {
-            background-color: #7c4dff;
-            color: white;
-            font-size: 15px;
-            padding: 10px 24px;
-        }
-
-        .btn-compile:hover {
-            background-color: #651fff;
-        }
-
-        .btn-compile:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-
-        .btn-success {
-            background-color: #4caf50;
-            color: white;
-            font-size: 16px;
-            padding: 12px 30px;
-        }
-        
-        .btn-success:hover {
-            background-color: #45a049;
-        }
-        
-        .btn-success:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-        
-        .submit-section {
-            text-align: center;
-            padding-top: 20px;
-            border-top: 2px solid #e0e0e0;
-        }
-        
-        .message {
-            padding: 12px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            display: none;
-        }
-        
-        .message.success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        
-        .message.error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        
-        .file-input {
-            display: none;
-        }
-        
-        .upload-label {
-            cursor: pointer;
-        }
-
-        /* Compilation section styles */
-        .compile-box {
-            padding: 12px;
-            border-radius: 4px;
-            margin-top: 15px;
-            margin-bottom: 10px;
-        }
-
-        .compile-box.queue {
-            background: #e3f2fd;
-        }
-
-        .compile-box.compiling {
-            background: #fff3cd;
-        }
-
-        .compile-box.success {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-        }
-
-        .compile-box.error {
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-        }
-
-        .compile-box .title {
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
-
-        .compile-box .detail {
-            font-size: 12px;
-            color: #666;
-        }
-
-        .compile-output pre {
-            background: #1e1e1e;
-            color: #d4d4d4;
-            padding: 15px;
-            border-radius: 4px;
-            overflow-x: auto;
-            max-height: 400px;
-            font-size: 13px;
-            line-height: 1.5;
-            margin-top: 10px;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-
-        .compile-unavailable {
+        .file-item.excluded .file-name {
+            text-decoration: line-through;
             color: #999;
-            font-style: italic;
-            font-size: 13px;
         }
+        .file-item.extra { background-color: #e3f2fd; border-color: #90caf9; }
+
+        .file-status {
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            margin-right: 15px; font-size: 20px;
+            flex-shrink: 0;
+        }
+        .file-status.default { background-color: #e0e0e0; color: #999; }
+        .file-status.uploaded { background-color: #4caf50; color: white; }
+        .file-status.excluded-icon { background-color: #bdbdbd; color: white; }
+        .file-status.extra-icon { background-color: #42a5f5; color: white; }
+
+        .file-info { flex-grow: 1; }
+        .file-name { font-weight: 600; color: #333; margin-bottom: 4px; }
+        .file-details { font-size: 12px; color: #666; }
+
+        .file-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        button, .btn {
+            padding: 8px 16px; border: none; border-radius: 4px;
+            cursor: pointer; font-size: 13px; transition: all 0.2s;
+            text-decoration: none; display: inline-block;
+        }
+        .btn-primary { background-color: #2196F3; color: white; }
+        .btn-primary:hover { background-color: #1976D2; }
+        .btn-secondary { background-color: #f5f5f5; color: #333; border: 1px solid #ddd; }
+        .btn-secondary:hover { background-color: #e0e0e0; }
+        .btn-warning { background-color: #ff9800; color: white; }
+        .btn-warning:hover { background-color: #f57c00; }
+        .btn-danger { background-color: #f44336; color: white; }
+        .btn-danger:hover { background-color: #d32f2f; }
+        .btn-compile { background-color: #7c4dff; color: white; font-size: 15px; padding: 10px 24px; }
+        .btn-compile:hover { background-color: #651fff; }
+        .btn-compile:disabled { background-color: #ccc; cursor: not-allowed; }
+        .btn-success { background-color: #4caf50; color: white; font-size: 16px; padding: 12px 30px; }
+        .btn-success:hover { background-color: #45a049; }
+        .btn-success:disabled { background-color: #ccc; cursor: not-allowed; }
+
+        .submit-section { text-align: center; padding-top: 20px; border-top: 2px solid #e0e0e0; }
+
+        .message { padding: 12px; border-radius: 4px; margin-bottom: 20px; display: none; }
+        .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        .file-input { display: none; }
+        .upload-label { cursor: pointer; }
+
+        .add-file-area {
+            border: 2px dashed #90caf9;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+            color: #666;
+            margin-top: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .add-file-area:hover { border-color: #42a5f5; background-color: #f5f9ff; }
+
+        .compile-box { padding: 12px; border-radius: 4px; margin-top: 15px; margin-bottom: 10px; }
+        .compile-box.queue { background: #e3f2fd; }
+        .compile-box.compiling { background: #fff3cd; }
+        .compile-box.success { background: #d4edda; border: 1px solid #c3e6cb; }
+        .compile-box.error { background: #f8d7da; border: 1px solid #f5c6cb; }
+        .compile-box .title { font-weight: 600; margin-bottom: 4px; }
+        .compile-box .detail { font-size: 12px; color: #666; }
+        .compile-output pre {
+            background: #1e1e1e; color: #d4d4d4;
+            padding: 15px; border-radius: 4px;
+            overflow-x: auto; max-height: 400px;
+            font-size: 13px; line-height: 1.5;
+            margin-top: 10px; white-space: pre-wrap; word-wrap: break-word;
+        }
+        .compile-unavailable { color: #999; font-style: italic; font-size: 13px; }
     </style>
 </head>
 <body>
@@ -284,114 +148,146 @@
             </div>
             <a href="/" class="back-link">← Back to Assignments</a>
         </header>
-        
+
         <div id="message" class="message"></div>
-        
+
         <!-- ============================================================ -->
-        <!-- Code Files Section                                           -->
+        <!-- Template Code Files                                          -->
         <!-- ============================================================ -->
         <div class="section">
             <h2 class="section-title">Code Files</h2>
-            
-            {% for filename in code_files %}
-            <div class="file-item {% if uploaded_files[filename]['uploaded'] %}uploaded{% endif %}" 
+            <p class="section-subtitle">
+                Template files are included by default. Upload your version to override,
+                or exclude files you don't need.
+            </p>
+
+            {% for filename, info in template_files.items() %}
+            <div class="file-item {% if info.excluded %}excluded{% elif info.uploaded %}uploaded{% endif %}"
                  data-filename="{{ filename }}">
-                <div class="file-status {% if uploaded_files[filename]['uploaded'] %}uploaded{% else %}default{% endif %}">
-                    {% if uploaded_files[filename]['uploaded'] %}
-                        ✓
-                    {% else %}
-                        📄
-                    {% endif %}
+                <div class="file-status {% if info.excluded %}excluded-icon{% elif info.uploaded %}uploaded{% else %}default{% endif %}">
+                    {% if info.excluded %}✗{% elif info.uploaded %}✓{% else %}📄{% endif %}
                 </div>
-                
+
                 <div class="file-info">
                     <div class="file-name">{{ filename }}</div>
                     <div class="file-details">
-                        {% if uploaded_files[filename]['uploaded'] %}
-                            Uploaded • {{ uploaded_files[filename]['size'] }} bytes • {{ uploaded_files[filename]['modified'] }}
+                        {% if info.excluded %}
+                            Excluded from build
+                        {% elif info.uploaded %}
+                            Uploaded • {{ info.size }} bytes • {{ info.modified }}
                         {% else %}
                             Using template default
                         {% endif %}
                     </div>
                 </div>
-                
+
                 <div class="file-actions">
-                    {% if uploaded_files[filename]['uploaded'] %}
+                    {% if info.excluded %}
+                        <button class="btn btn-secondary restore-btn" data-filename="{{ filename }}">↩ Restore</button>
+                    {% elif info.uploaded %}
                         <a href="/view/{{ assignment_id }}/{{ filename }}" target="_blank" class="btn btn-secondary">View My Code</a>
                         <button class="btn btn-warning revert-btn" data-filename="{{ filename }}">🔄 Revert</button>
+                        <button class="btn btn-danger exclude-btn" data-filename="{{ filename }}">✗ Exclude</button>
                     {% else %}
                         <a href="/view-template/{{ lab_name }}/{{ filename }}" target="_blank" class="btn btn-secondary">View Template</a>
+                        <button class="btn btn-danger exclude-btn" data-filename="{{ filename }}">✗ Exclude</button>
                     {% endif %}
-                    
+
+                    {% if not info.excluded %}
                     <label for="file-{{ filename }}" class="btn btn-primary upload-label">
-                        {% if uploaded_files[filename]['uploaded'] %}Replace{% else %}Upload{% endif %}
+                        {% if info.uploaded %}Replace{% else %}Upload{% endif %}
                     </label>
-                    <input type="file" 
-                           id="file-{{ filename }}" 
-                           class="file-input" 
+                    <input type="file"
+                           id="file-{{ filename }}"
+                           class="file-input"
                            accept=".c,.h"
                            data-filename="{{ filename }}">
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}
         </div>
-        
+
         <!-- ============================================================ -->
-        <!-- Writeup Section                                              -->
+        <!-- Extra Files (student-added)                                  -->
+        <!-- ============================================================ -->
+        <div class="section">
+            <h2 class="section-title">Additional Files</h2>
+            <p class="section-subtitle">
+                Add .c or .h files beyond the template. These will be included in your build and submission.
+            </p>
+
+            <div id="extra-files-list">
+            {% for filename, info in extra_files.items() %}
+            <div class="file-item extra" data-filename="{{ filename }}">
+                <div class="file-status extra-icon">+</div>
+                <div class="file-info">
+                    <div class="file-name">{{ filename }}</div>
+                    <div class="file-details">{{ info.size }} bytes • {{ info.modified }}</div>
+                </div>
+                <div class="file-actions">
+                    <a href="/view/{{ assignment_id }}/{{ filename }}" target="_blank" class="btn btn-secondary">View</a>
+                    <label for="extra-replace-{{ filename }}" class="btn btn-primary upload-label">Replace</label>
+                    <input type="file"
+                           id="extra-replace-{{ filename }}"
+                           class="file-input"
+                           accept=".c,.h"
+                           data-filename="{{ filename }}">
+                    <button class="btn btn-danger delete-extra-btn" data-filename="{{ filename }}">Delete</button>
+                </div>
+            </div>
+            {% endfor %}
+            </div>
+
+            <label for="add-extra-file" class="add-file-area">
+                + Add a new .c or .h file
+            </label>
+            <input type="file" id="add-extra-file" class="file-input" accept=".c,.h">
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Writeup                                                      -->
         <!-- ============================================================ -->
         <div class="section">
             <h2 class="section-title">Writeup (Choose TXT or PDF)</h2>
-            
-            {% for filename in writeup_files %}
-            {% if filename in uploaded_files and uploaded_files[filename]['uploaded'] %}
-            <div class="file-item uploaded" data-filename="{{ filename }}">
-                <div class="file-status uploaded">✓</div>
-                
-                <div class="file-info">
-                    <div class="file-name">{{ filename }}</div>
-                    <div class="file-details">
-                        Uploaded • {{ uploaded_files[filename]['size'] }} bytes • {{ uploaded_files[filename]['modified'] }}
+
+            {% set writeup_uploaded = namespace(value=False) %}
+            {% for filename, info in writeup_status.items() %}
+                {% if info.uploaded %}
+                {% set writeup_uploaded.value = True %}
+                <div class="file-item uploaded" data-filename="{{ filename }}">
+                    <div class="file-status uploaded">✓</div>
+                    <div class="file-info">
+                        <div class="file-name">{{ filename }}</div>
+                        <div class="file-details">Uploaded • {{ info.size }} bytes • {{ info.modified }}</div>
+                    </div>
+                    <div class="file-actions">
+                        <label for="file-{{ filename }}" class="btn btn-primary upload-label">Replace</label>
+                        <input type="file"
+                               id="file-{{ filename }}"
+                               class="file-input"
+                               accept=".txt,.pdf"
+                               data-filename="{{ filename }}">
                     </div>
                 </div>
-                
-                <div class="file-actions">
-                    <label for="file-{{ filename }}" class="btn btn-primary upload-label">
-                        Replace
-                    </label>
-                    <input type="file" 
-                           id="file-{{ filename }}" 
-                           class="file-input" 
-                           accept=".txt,.pdf"
-                           data-filename="{{ filename }}">
-                </div>
-            </div>
-            {% endif %}
-            {% endfor %}
-            
-            {% set writeup_uploaded = namespace(value=False) %}
-            {% for filename in writeup_files %}
-                {% if filename in uploaded_files and uploaded_files[filename]['uploaded'] %}
-                    {% set writeup_uploaded.value = True %}
                 {% endif %}
             {% endfor %}
-            
+
             {% if not writeup_uploaded.value %}
             <div class="file-item" data-filename="writeup">
                 <div class="file-status default">📝</div>
-                
                 <div class="file-info">
                     <div class="file-name">No writeup uploaded yet</div>
                     <div class="file-details">Upload either a .txt or .pdf file</div>
                 </div>
-                
                 <div class="file-actions">
                     {% for filename in writeup_files %}
                     <label for="file-{{ filename }}" class="btn btn-primary upload-label">
                         Upload {{ filename.split('.')[-1].upper() }}
                     </label>
-                    <input type="file" 
-                           id="file-{{ filename }}" 
-                           class="file-input" 
+                    <input type="file"
+                           id="file-{{ filename }}"
+                           class="file-input"
                            accept=".{{ filename.split('.')[-1] }}"
                            data-filename="{{ filename }}">
                     {% endfor %}
@@ -401,344 +297,235 @@
         </div>
 
         <!-- ============================================================ -->
-        <!-- Compilation Section                                          -->
+        <!-- Compilation                                                  -->
         <!-- ============================================================ -->
         <div class="section">
             <h2 class="section-title">Test Compilation</h2>
             <p style="margin-bottom: 15px; color: #666;">
-                Test your code compiles before submitting. This checks for syntax errors
-                and other compilation issues using the TI ARM toolchain.
+                Test your code compiles before submitting.
             </p>
 
             {% if compile_available %}
             <div id="compile-section">
-                <button id="compile-btn" class="btn btn-compile">
-                    🔨 Test Compilation
-                </button>
-
+                <button id="compile-btn" class="btn btn-compile">🔨 Test Compilation</button>
                 <div id="compile-status" style="display: none;">
-
-                    <!-- Queue position -->
                     <div id="queue-info" class="compile-box queue" style="display: none;">
                         <div class="title">⏳ In Queue</div>
                         <div id="queue-position"></div>
                         <div id="queue-eta" class="detail"></div>
-                        <button id="cancel-compile-btn" class="btn btn-warning" style="margin-top: 8px;">
-                            Cancel
-                        </button>
+                        <button id="cancel-compile-btn" class="btn btn-warning" style="margin-top: 8px;">Cancel</button>
                     </div>
-
-                    <!-- Compiling spinner -->
                     <div id="compiling-info" class="compile-box compiling" style="display: none;">
                         <div class="title">⚙️ Compiling…</div>
                         <div class="detail">This usually takes 5–15 seconds</div>
                     </div>
-
-                    <!-- Results -->
                     <div id="compile-results" style="display: none;">
                         <div id="compile-success" class="compile-box success" style="display: none;">
                             <div class="title" style="color: #155724;">✓ Compilation Successful!</div>
                             <div class="detail" style="color: #155724;">Your code compiled without errors.</div>
                         </div>
-
                         <div id="compile-error" class="compile-box error" style="display: none;">
                             <div class="title" style="color: #721c24;">✗ Compilation Failed</div>
                             <div class="detail" style="color: #721c24;">See errors below:</div>
                         </div>
-
-                        <div id="compile-output" class="compile-output">
-                            <pre></pre>
-                        </div>
+                        <div id="compile-output" class="compile-output"><pre></pre></div>
                     </div>
                 </div>
             </div>
             {% else %}
-            <p class="compile-unavailable">
-                ⚠ Compilation service is currently unavailable (Redis not connected).
-            </p>
+            <p class="compile-unavailable">⚠ Compilation service is currently unavailable.</p>
             {% endif %}
         </div>
 
         <!-- ============================================================ -->
-        <!-- Submit Section                                               -->
+        <!-- Submit                                                       -->
         <!-- ============================================================ -->
         <div class="submit-section">
             <p style="margin-bottom: 15px; color: #666;">
-                Ready to submit? This will create a zip file with all your code
-                (uploaded files + template defaults) and your writeup, then upload
-                it to Canvas.
+                Ready to submit? This will create a zip with your code and writeup and upload it to Canvas.
             </p>
             <button id="submit-btn" class="btn btn-success">Submit to Canvas</button>
         </div>
     </div>
-    
+
     <script>
         const assignmentId = '{{ assignment_id }}';
-        
+
         // ================================================================
-        // File upload handling
+        // File uploads (template + writeup replacements)
         // ================================================================
         document.querySelectorAll('.file-input').forEach(input => {
+            if (input.id === 'add-extra-file') return;
             input.addEventListener('change', async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
-                
                 const filename = e.target.dataset.filename;
                 const formData = new FormData();
                 formData.append('file', file);
-                
                 showMessage('Uploading…', 'success');
-                
                 try {
-                    const response = await fetch(`/upload/${assignmentId}/${filename}`, {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showMessage('File uploaded successfully!', 'success');
-                        setTimeout(() => location.reload(), 1000);
-                    } else {
-                        showMessage(result.error || 'Upload failed', 'error');
-                    }
-                } catch (error) {
-                    showMessage('Upload failed: ' + error.message, 'error');
-                }
+                    const resp = await fetch(`/upload/${assignmentId}/${filename}`, { method: 'POST', body: formData });
+                    const result = await resp.json();
+                    if (result.success) { showMessage('File uploaded!', 'success'); setTimeout(() => location.reload(), 800); }
+                    else { showMessage(result.error || 'Upload failed', 'error'); }
+                } catch (err) { showMessage('Upload failed: ' + err.message, 'error'); }
             });
         });
-        
+
         // ================================================================
-        // Revert to template
+        // Add extra file
         // ================================================================
-        document.querySelectorAll('.revert-btn').forEach(button => {
-            button.addEventListener('click', async (e) => {
-                const filename = e.target.dataset.filename;
-                
-                if (!confirm(`Revert ${filename} to the template version? Your uploaded code will be deleted.`)) {
-                    return;
-                }
-                
+        document.getElementById('add-extra-file').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('file', file);
+            showMessage('Uploading…', 'success');
+            try {
+                const resp = await fetch(`/upload-extra/${assignmentId}`, { method: 'POST', body: formData });
+                const result = await resp.json();
+                if (result.success) { showMessage(`Added ${result.filename}`, 'success'); setTimeout(() => location.reload(), 800); }
+                else { showMessage(result.error || 'Upload failed', 'error'); }
+            } catch (err) { showMessage('Upload failed: ' + err.message, 'error'); }
+        });
+
+        // ================================================================
+        // Delete extra file
+        // ================================================================
+        document.querySelectorAll('.delete-extra-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const filename = btn.dataset.filename;
+                if (!confirm(`Delete ${filename}?`)) return;
                 try {
-                    const response = await fetch(`/revert/${assignmentId}/${filename}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' }
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showMessage(result.message, 'success');
-                        setTimeout(() => location.reload(), 1000);
-                    } else {
-                        showMessage(result.error || 'Revert failed', 'error');
-                    }
-                } catch (error) {
-                    showMessage('Revert failed: ' + error.message, 'error');
-                }
+                    const resp = await fetch(`/delete-extra/${assignmentId}/${filename}`, { method: 'POST' });
+                    const result = await resp.json();
+                    if (result.success) { showMessage(result.message, 'success'); setTimeout(() => location.reload(), 800); }
+                    else { showMessage(result.error || 'Delete failed', 'error'); }
+                } catch (err) { showMessage('Delete failed: ' + err.message, 'error'); }
             });
         });
-        
+
         // ================================================================
-        // Canvas submission
+        // Revert / Exclude / Restore
+        // ================================================================
+        document.querySelectorAll('.revert-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const filename = btn.dataset.filename;
+                if (!confirm(`Revert ${filename} to template default?`)) return;
+                try {
+                    const resp = await fetch(`/revert/${assignmentId}/${filename}`, { method: 'POST', headers: {'Content-Type':'application/json'} });
+                    const result = await resp.json();
+                    if (result.success) { showMessage(result.message, 'success'); setTimeout(() => location.reload(), 800); }
+                    else { showMessage(result.error || 'Revert failed', 'error'); }
+                } catch (err) { showMessage('Revert failed: ' + err.message, 'error'); }
+            });
+        });
+
+        document.querySelectorAll('.exclude-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const filename = btn.dataset.filename;
+                if (!confirm(`Exclude ${filename} from your build and submission?`)) return;
+                try {
+                    const resp = await fetch(`/exclude/${assignmentId}/${filename}`, { method: 'POST', headers: {'Content-Type':'application/json'} });
+                    const result = await resp.json();
+                    if (result.success) { showMessage(result.message, 'success'); setTimeout(() => location.reload(), 800); }
+                    else { showMessage(result.error || 'Exclude failed', 'error'); }
+                } catch (err) { showMessage('Exclude failed: ' + err.message, 'error'); }
+            });
+        });
+
+        document.querySelectorAll('.restore-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const filename = btn.dataset.filename;
+                try {
+                    const resp = await fetch(`/restore/${assignmentId}/${filename}`, { method: 'POST', headers: {'Content-Type':'application/json'} });
+                    const result = await resp.json();
+                    if (result.success) { showMessage(result.message, 'success'); setTimeout(() => location.reload(), 800); }
+                    else { showMessage(result.error || 'Restore failed', 'error'); }
+                } catch (err) { showMessage('Restore failed: ' + err.message, 'error'); }
+            });
+        });
+
+        // ================================================================
+        // Submit
         // ================================================================
         document.getElementById('submit-btn').addEventListener('click', async () => {
-            if (!confirm('Submit to Canvas? This will upload a zip with all your code and writeup.')) {
-                return;
-            }
-            
-            const submitBtn = document.getElementById('submit-btn');
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Submitting…';
-            
+            if (!confirm('Submit to Canvas?')) return;
+            const btn = document.getElementById('submit-btn');
+            btn.disabled = true; btn.textContent = 'Submitting…';
             try {
-                const response = await fetch(`/submit/${assignmentId}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    showMessage(result.message, 'success');
-                    submitBtn.textContent = 'Submitted ✓';
-                } else {
-                    showMessage(result.error || 'Submission failed', 'error');
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Submit to Canvas';
-                }
-            } catch (error) {
-                showMessage('Submission failed: ' + error.message, 'error');
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Submit to Canvas';
-            }
+                const resp = await fetch(`/submit/${assignmentId}`, { method: 'POST', headers: {'Content-Type':'application/json'} });
+                const result = await resp.json();
+                if (result.success) { showMessage(result.message, 'success'); btn.textContent = 'Submitted ✓'; }
+                else { showMessage(result.error || 'Submission failed', 'error'); btn.disabled = false; btn.textContent = 'Submit to Canvas'; }
+            } catch (err) { showMessage('Submission failed: ' + err.message, 'error'); btn.disabled = false; btn.textContent = 'Submit to Canvas'; }
         });
-        
+
         // ================================================================
         // Compilation
         // ================================================================
         (function() {
             const compileBtn = document.getElementById('compile-btn');
-            if (!compileBtn) return;  // compile not available
-
+            if (!compileBtn) return;
             const compileStatus = document.getElementById('compile-status');
-            const queueInfo     = document.getElementById('queue-info');
+            const queueInfo = document.getElementById('queue-info');
             const compilingInfo = document.getElementById('compiling-info');
             const compileResults = document.getElementById('compile-results');
-            const cancelBtn     = document.getElementById('cancel-compile-btn');
+            const cancelBtn = document.getElementById('cancel-compile-btn');
+            let currentJobId = null, pollInterval = null;
 
-            let currentJobId = null;
-            let pollInterval = null;
-
-            // Start compilation
             compileBtn.addEventListener('click', async () => {
-                compileBtn.disabled = true;
-                compileBtn.textContent = 'Starting…';
-                compileStatus.style.display = 'block';
-                hideAllCompileStatus();
-
+                compileBtn.disabled = true; compileBtn.textContent = 'Starting…';
+                compileStatus.style.display = 'block'; hideAll();
                 try {
                     const resp = await fetch(`/compile/${assignmentId}`, { method: 'POST' });
                     const data = await resp.json();
-
-                    if (data.success) {
-                        currentJobId = data.job_id;
-                        startPolling();
-                    } else {
-                        showMessage(data.error || 'Failed to start compilation', 'error');
-                        resetCompileBtn();
-                    }
-                } catch (err) {
-                    showMessage('Error starting compilation: ' + err.message, 'error');
-                    resetCompileBtn();
-                }
+                    if (data.success) { currentJobId = data.job_id; startPoll(); }
+                    else { showMessage(data.error || 'Failed', 'error'); reset(); }
+                } catch (err) { showMessage('Error: ' + err.message, 'error'); reset(); }
             });
 
-            // Cancel
             cancelBtn.addEventListener('click', async () => {
-                if (!currentJobId || !confirm('Cancel this compilation?')) return;
-
+                if (!currentJobId || !confirm('Cancel?')) return;
                 try {
                     const resp = await fetch(`/compile-cancel/${currentJobId}`, { method: 'POST' });
                     const data = await resp.json();
-
-                    if (data.success) {
-                        showMessage('Compilation cancelled.', 'success');
-                        stopPolling();
-                        resetCompileBtn();
-                    } else {
-                        showMessage(data.error || 'Failed to cancel', 'error');
-                    }
-                } catch (err) {
-                    showMessage('Error cancelling: ' + err.message, 'error');
-                }
+                    if (data.success) { showMessage('Cancelled.', 'success'); stopPoll(); reset(); }
+                    else { showMessage(data.error, 'error'); }
+                } catch (err) { showMessage('Error: ' + err.message, 'error'); }
             });
 
-            function startPolling() {
-                pollInterval = setInterval(checkStatus, 1000);
-                checkStatus();
-            }
+            function startPoll() { pollInterval = setInterval(check, 1000); check(); }
+            function stopPoll() { if (pollInterval) { clearInterval(pollInterval); pollInterval = null; } }
 
-            function stopPolling() {
-                if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-            }
-
-            async function checkStatus() {
+            async function check() {
                 if (!currentJobId) return;
-
                 try {
-                    const resp = await fetch(`/compile-status/${currentJobId}`);
-                    const s = await resp.json();
-
-                    switch (s.status) {
-                        case 'queued':
-                            showQueueStatus(s);
-                            break;
-                        case 'compiling':
-                            showCompilingStatus();
-                            break;
-                        case 'complete':
-                        case 'failed':
-                            stopPolling();
-                            showCompileResults(s);
-                            resetCompileBtn();
-                            break;
-                        case 'cancelled':
-                            stopPolling();
-                            showMessage('Compilation was cancelled.', 'success');
-                            resetCompileBtn();
-                            break;
-                    }
-                } catch (err) {
-                    console.error('Status poll error:', err);
-                }
+                    const s = (await (await fetch(`/compile-status/${currentJobId}`)).json());
+                    if (s.status === 'queued') { hideAll(); queueInfo.style.display = 'block'; document.getElementById('queue-position').textContent = `Position: #${s.position||0}`; document.getElementById('queue-eta').textContent = (s.estimated_wait > 0) ? `~${Math.ceil(s.estimated_wait)}s` : 'Starting soon…'; }
+                    else if (s.status === 'compiling') { hideAll(); compilingInfo.style.display = 'block'; }
+                    else if (s.status === 'complete' || s.status === 'failed') { stopPoll(); showResults(s); reset(); }
+                    else if (s.status === 'cancelled') { stopPoll(); showMessage('Cancelled.', 'success'); reset(); }
+                } catch (err) { console.error(err); }
             }
 
-            function hideAllCompileStatus() {
-                queueInfo.style.display = 'none';
-                compilingInfo.style.display = 'none';
-                compileResults.style.display = 'none';
-                document.getElementById('compile-success').style.display = 'none';
-                document.getElementById('compile-error').style.display = 'none';
+            function hideAll() { queueInfo.style.display='none'; compilingInfo.style.display='none'; compileResults.style.display='none'; document.getElementById('compile-success').style.display='none'; document.getElementById('compile-error').style.display='none'; }
+
+            function showResults(s) {
+                hideAll(); compileResults.style.display = 'block';
+                const r = s.result || {};
+                if (r.success) { document.getElementById('compile-success').style.display = 'block'; document.querySelector('#compile-output pre').textContent = r.stdout || 'Success.'; }
+                else { document.getElementById('compile-error').style.display = 'block'; let o=''; if(r.stderr) o+=r.stderr; if(r.stdout) o+=(o?'\n\n--- stdout ---\n':'')+r.stdout; if(!o) o=r.error||'Unknown error'; document.querySelector('#compile-output pre').textContent = o; }
             }
 
-            function showQueueStatus(s) {
-                hideAllCompileStatus();
-                queueInfo.style.display = 'block';
-                const pos = s.position || 0;
-                const eta = s.estimated_wait || 0;
-                document.getElementById('queue-position').textContent =
-                    `Position in queue: #${pos}`;
-                document.getElementById('queue-eta').textContent =
-                    eta > 0 ? `Estimated wait: ~${Math.ceil(eta)}s` : 'Starting soon…';
-            }
-
-            function showCompilingStatus() {
-                hideAllCompileStatus();
-                compilingInfo.style.display = 'block';
-            }
-
-            function showCompileResults(s) {
-                hideAllCompileStatus();
-                compileResults.style.display = 'block';
-
-                const result = s.result || {};
-
-                if (result.success) {
-                    document.getElementById('compile-success').style.display = 'block';
-                    const output = result.stdout || 'Compilation completed successfully.';
-                    document.querySelector('#compile-output pre').textContent = output;
-                } else {
-                    document.getElementById('compile-error').style.display = 'block';
-                    // Show stderr first (compiler errors), fall back to stdout or error msg
-                    let output = '';
-                    if (result.stderr)  output += result.stderr;
-                    if (result.stdout)  output += (output ? '\n\n--- stdout ---\n' : '') + result.stdout;
-                    if (!output)        output = result.error || 'Unknown error';
-                    document.querySelector('#compile-output pre').textContent = output;
-                }
-            }
-
-            function resetCompileBtn() {
-                compileBtn.disabled = false;
-                compileBtn.textContent = '🔨 Test Compilation';
-                currentJobId = null;
-            }
+            function reset() { compileBtn.disabled = false; compileBtn.textContent = '🔨 Test Compilation'; currentJobId = null; }
         })();
 
         // ================================================================
-        // Shared message helper
-        // ================================================================
         function showMessage(text, type) {
             const el = document.getElementById('message');
-            el.textContent = text;
-            el.className = 'message ' + type;
-            el.style.display = 'block';
-            
-            if (type === 'success' && !text.includes('…')) {
-                setTimeout(() => { el.style.display = 'none'; }, 5000);
-            }
+            el.textContent = text; el.className = 'message ' + type; el.style.display = 'block';
+            if (type === 'success' && !text.includes('…')) setTimeout(() => { el.style.display = 'none'; }, 5000);
         }
     </script>
 </body>

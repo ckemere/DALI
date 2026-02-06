@@ -245,9 +245,12 @@ class CompilationQueue:
 
             lab_name = meta.get("lab_name", "")
             template_dir = os.path.join(TEMPLATE_FOLDER, lab_name)
-            source_files = lab_config.get("code_files", [])
             display_name = lab_config.get("display_name", "firmware")
             output_name = display_name.replace(" ", "_")
+
+            # Discover all .c files actually present in the build directory
+            # (includes template files, student overrides, and extra files)
+            source_files = [f for f in os.listdir(build_dir) if f.endswith(".c")]
 
             logging.info(
                 "Job %s: compiling %d source files in %s",
