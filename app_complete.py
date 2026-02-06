@@ -164,43 +164,103 @@ def build_uploaded_files_status(student_folder, lab_config):
     """
     Build the status dict the assignment_api.html template expects.
 
-    For every code and writeup file in the lab config, return:
-        filename -> {
-            "uploaded": bool,   # True if the student has uploaded their own version
-            "size":     int,    # file size in bytes (0 if not uploaded)
-            "modified": str,    # human-readable mtime (empty if not uploaded)
-        }
-
-    A file is considered "uploaded" only if it exists in the student's
-    submission folder.  Template originals are never copied there; they
-    are used as read-only fallbacks at compile / submit time.
+    Returns a dict with three keys:
+      "template_files": ordered dict of template code files
+          filename -> {
+              "uploaded": bool,     # student has their own version
+              "excluded": bool,     # student has excluded this template file
+              "size": int,
+              "modified": str,
+          }
+      "extra_files": ordered dict of student-added .c/.h files not in template
+          filename -> { "size": int, "modified": str }
+      "writeup_files": ordered dict of writeup files
+          filename -> { "uploaded": bool, "size": int, "modified": str }
     """
-    all_files = lab_config["code_files"] + lab_config.get("writeup_files", [])
-    status = {}
-    for fname in all_files:
+    template_status = {}
+    for fname in lab_config["code_files"]:
         fpath = os.path.join(student_folder, fname)
+        excluded_marker = os.path.join(student_folder, fname + ".excluded")
         if os.path.isfile(fpath):
             stat = os.stat(fpath)
-            status[fname] = {
+            template_status[fname] = {
                 "uploaded": True,
+                "excluded": False,
                 "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime).strftime(
-                    "%Y-%m-%d %H:%M"
-                ),
+                "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
             }
         else:
-            status[fname] = {
+            template_status[fname] = {
                 "uploaded": False,
+                "excluded": os.path.isfile(excluded_marker),
                 "size": 0,
                 "modified": "",
             }
-    return status
+
+    # Discover extra .c/.h files the student added
+    known_files = set(lab_config["code_files"]) | set(lab_config.get("writeup_files", []))
+    extra_status = {}
+    if os.path.isdir(student_folder):
+        for fname in sorted(os.listdir(student_folder)):
+            if fname in known_files or fname.endswith(".excluded"):
+                continue
+            ext = fname.rsplit(".", 1)[1].lower() if "." in fname else ""
+            if ext in ALLOWED_CODE_EXTENSIONS:
+                stat = os.stat(os.path.join(student_folder, fname))
+                extra_status[fname] = {
+                    "size": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                }
+
+    # Writeup files
+    writeup_status = {}
+    for fname in lab_config.get("writeup_files", []):
+        fpath = os.path.join(student_folder, fname)
+        if os.path.isfile(fpath):
+            stat = os.stat(fpath)
+            writeup_status[fname] = {
+                "uploaded": True,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            }
+        else:
+            writeup_status[fname] = {"uploaded": False, "size": 0, "modified": ""}
+
+    return {
+        "template_files": template_status,
+        "extra_files": extra_status,
+        "writeup_files": writeup_status,
+    }
+
+
+def get_excluded_files(student_folder):
+    """Return set of filenames that the student has excluded."""
+    excluded = set()
+    if os.path.isdir(student_folder):
+        for fname in os.listdir(student_folder):
+            if fname.endswith(".excluded"):
+                excluded.add(fname[:-9])  # strip .excluded
+    return excluded
+
+
+def get_extra_files(student_folder, lab_config):
+    """Return list of student-added .c/.h filenames not in the template."""
+    known = set(lab_config["code_files"]) | set(lab_config.get("writeup_files", []))
+    extras = []
+    if os.path.isdir(student_folder):
+        for fname in sorted(os.listdir(student_folder)):
+            if fname in known or fname.endswith(".excluded"):
+                continue
+            ext = fname.rsplit(".", 1)[1].lower() if "." in fname else ""
+            if ext in ALLOWED_CODE_EXTENSIONS:
+                extras.append(fname)
+    return extras
 
 
 def prepare_build_directory(student_folder, lab_config):
     """
     Create a temporary build directory that merges template files with
-    student uploads.  Student files take priority over templates.
+    student uploads, respecting exclusions and including extra files.
 
     Returns the path to the build directory.
     """
@@ -208,8 +268,12 @@ def prepare_build_directory(student_folder, lab_config):
 
     build_dir = tempfile.mkdtemp(prefix="dali_build_")
     template_dir = lab_config["template_dir"]
+    excluded = get_excluded_files(student_folder)
 
+    # Template code files (student upload wins; skip excluded)
     for fname in lab_config["code_files"]:
+        if fname in excluded:
+            continue
         student_path = os.path.join(student_folder, fname)
         template_path = get_template_file_path(template_dir, fname)
 
@@ -220,7 +284,11 @@ def prepare_build_directory(student_folder, lab_config):
         else:
             logging.warning("File %s missing from both student dir and templates", fname)
 
-    # Also copy the linker script and any other non-.c/.h files from template
+    # Extra files added by the student
+    for fname in get_extra_files(student_folder, lab_config):
+        shutil.copy2(os.path.join(student_folder, fname), os.path.join(build_dir, fname))
+
+    # Copy linker script and other non-.c/.h files from template
     template_full_dir = os.path.join(TEMPLATE_FOLDER, template_dir)
     for fname in os.listdir(template_full_dir):
         dest = os.path.join(build_dir, fname)
@@ -233,14 +301,18 @@ def prepare_build_directory(student_folder, lab_config):
 def create_submission_zip(student_folder, lab_config):
     """
     Build an in-memory zip archive that merges template defaults with
-    student uploads, plus the writeup.  Returns a BytesIO object.
+    student uploads, respecting exclusions and including extras.
+    Returns a BytesIO object.
     """
     buf = io.BytesIO()
     template_dir = lab_config["template_dir"]
+    excluded = get_excluded_files(student_folder)
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Code files (student upload wins over template)
+        # Template code files (student upload wins; skip excluded)
         for fname in lab_config["code_files"]:
+            if fname in excluded:
+                continue
             student_path = os.path.join(student_folder, fname)
             template_path = get_template_file_path(template_dir, fname)
 
@@ -249,7 +321,11 @@ def create_submission_zip(student_folder, lab_config):
             elif os.path.isfile(template_path):
                 zf.write(template_path, fname)
 
-        # Writeup (student must provide this themselves)
+        # Extra files added by the student
+        for fname in get_extra_files(student_folder, lab_config):
+            zf.write(os.path.join(student_folder, fname), fname)
+
+        # Writeup (student must provide)
         for fname in lab_config.get("writeup_files", []):
             student_path = os.path.join(student_folder, fname)
             if os.path.isfile(student_path):
@@ -349,7 +425,9 @@ def validate_session():
 def home():
     if "student_id" not in session:
         return redirect(url_for("login"))
-    assignments = canvas_api_request(f"courses/{COURSE_ID}/assignments")
+    all_assignments = canvas_api_request(f"courses/{COURSE_ID}/assignments")
+    # Only show assignments that have a matching lab configuration
+    assignments = [a for a in all_assignments if str(a["id"]) in LAB_CONFIGS]
     return render_template(
         "home_api.html",
         assignments=assignments,
@@ -371,18 +449,19 @@ def assignment(assignment_id):
         return redirect(url_for("home"))
 
     student_folder = get_submission_folder(session["student_id"], assignment_id)
-    uploaded_files = build_uploaded_files_status(student_folder, lab)
+    file_status = build_uploaded_files_status(student_folder, lab)
 
     return render_template(
         "assignment_api.html",
-        # Variables the template actually uses:
         assignment_id=assignment_id,
         assignment_title=assignment_data.get("name", "Assignment"),
         student_name=session["student_name"],
         lab_name=lab["template_dir"],
         code_files=lab["code_files"],
         writeup_files=lab.get("writeup_files", []),
-        uploaded_files=uploaded_files,
+        template_files=file_status["template_files"],
+        extra_files=file_status["extra_files"],
+        writeup_status=file_status["writeup_files"],
         compile_available=compile_queue.is_available(),
     )
 
@@ -392,18 +471,13 @@ def assignment(assignment_id):
 
 @app.route("/upload/<assignment_id>/<filename>", methods=["POST"])
 def upload_file(assignment_id, filename):
-    """Accept a single file upload from the student."""
+    """Accept a single file upload. Allows both template files and new extra files."""
     if "student_id" not in session:
         return jsonify(error="Not authenticated"), 403
 
     lab = get_lab_config_by_assignment_id(assignment_id)
     if not lab:
         return jsonify(error="Unknown assignment"), 400
-
-    # Make sure the requested filename is one we expect
-    expected_files = lab["code_files"] + lab.get("writeup_files", [])
-    if filename not in expected_files:
-        return jsonify(error=f"Unexpected filename: {filename}"), 400
 
     if "file" not in request.files:
         return jsonify(error="No file provided"), 400
@@ -414,22 +488,64 @@ def upload_file(assignment_id, filename):
 
     # Validate extension
     ext = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
-    if ext in ALLOWED_CODE_EXTENSIONS:
-        pass  # ok
-    elif ext in ALLOWED_DOC_EXTENSIONS:
-        pass  # ok
-    else:
+    if ext not in ALLOWED_CODE_EXTENSIONS and ext not in ALLOWED_DOC_EXTENSIONS:
         return jsonify(error=f"File type .{ext} not allowed"), 400
+
+    # Sanitize — no path traversal
+    filename = secure_filename(filename)
+    if not filename:
+        return jsonify(error="Invalid filename"), 400
+
+    student_folder = get_submission_folder(session["student_id"], assignment_id)
+    dest = os.path.join(student_folder, filename)
+    file.save(dest)
+
+    # If this was an excluded template file being re-uploaded, remove the marker
+    excluded_marker = dest + ".excluded"
+    if os.path.isfile(excluded_marker):
+        os.remove(excluded_marker)
+
+    logging.info(
+        "Student %s uploaded %s for assignment %s",
+        session.get("netid"), filename, assignment_id,
+    )
+    return jsonify(success=True)
+
+
+@app.route("/upload-extra/<assignment_id>", methods=["POST"])
+def upload_extra_file(assignment_id):
+    """Upload a new file not in the template. Filename comes from the uploaded file."""
+    if "student_id" not in session:
+        return jsonify(error="Not authenticated"), 403
+
+    lab = get_lab_config_by_assignment_id(assignment_id)
+    if not lab:
+        return jsonify(error="Unknown assignment"), 400
+
+    if "file" not in request.files:
+        return jsonify(error="No file provided"), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify(error="Empty filename"), 400
+
+    filename = secure_filename(file.filename)
+    if not filename:
+        return jsonify(error="Invalid filename"), 400
+
+    ext = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
+    if ext not in ALLOWED_CODE_EXTENSIONS:
+        return jsonify(error=f"Only .c and .h files allowed, got .{ext}"), 400
 
     student_folder = get_submission_folder(session["student_id"], assignment_id)
     dest = os.path.join(student_folder, filename)
     file.save(dest)
 
     logging.info(
-        "Student %s uploaded %s for assignment %s",
-        session["student_id"], filename, assignment_id,
+        "Student %s uploaded extra file %s for assignment %s",
+        session.get("netid"), filename, assignment_id,
     )
-    return jsonify(success=True)
+    return jsonify(success=True, filename=filename)
 
 
 @app.route("/revert/<assignment_id>/<filename>", methods=["POST"])
@@ -452,11 +568,98 @@ def revert_file(assignment_id, filename):
         os.remove(fpath)
         logging.info(
             "Student %s reverted %s for assignment %s",
-            session["student_id"], filename, assignment_id,
+            session.get("netid"), filename, assignment_id,
         )
         return jsonify(success=True, message=f"{filename} reverted to template default.")
     else:
         return jsonify(success=True, message=f"{filename} was already using the template default.")
+
+
+@app.route("/exclude/<assignment_id>/<filename>", methods=["POST"])
+def exclude_file(assignment_id, filename):
+    """Exclude a template file from the build (without deleting student upload if any)."""
+    if "student_id" not in session:
+        return jsonify(error="Not authenticated"), 403
+
+    lab = get_lab_config_by_assignment_id(assignment_id)
+    if not lab:
+        return jsonify(error="Unknown assignment"), 400
+
+    if filename not in lab["code_files"]:
+        return jsonify(error="Can only exclude template files"), 400
+
+    student_folder = get_submission_folder(session["student_id"], assignment_id)
+
+    # Remove any student upload for this file
+    fpath = os.path.join(student_folder, filename)
+    if os.path.isfile(fpath):
+        os.remove(fpath)
+
+    # Create exclusion marker
+    marker = os.path.join(student_folder, filename + ".excluded")
+    with open(marker, "w") as f:
+        f.write("")
+
+    logging.info(
+        "Student %s excluded %s for assignment %s",
+        session.get("netid"), filename, assignment_id,
+    )
+    return jsonify(success=True, message=f"{filename} excluded from build.")
+
+
+@app.route("/restore/<assignment_id>/<filename>", methods=["POST"])
+def restore_file(assignment_id, filename):
+    """Restore a previously excluded template file."""
+    if "student_id" not in session:
+        return jsonify(error="Not authenticated"), 403
+
+    lab = get_lab_config_by_assignment_id(assignment_id)
+    if not lab:
+        return jsonify(error="Unknown assignment"), 400
+
+    if filename not in lab["code_files"]:
+        return jsonify(error="Can only restore template files"), 400
+
+    student_folder = get_submission_folder(session["student_id"], assignment_id)
+    marker = os.path.join(student_folder, filename + ".excluded")
+
+    if os.path.isfile(marker):
+        os.remove(marker)
+
+    logging.info(
+        "Student %s restored %s for assignment %s",
+        session.get("netid"), filename, assignment_id,
+    )
+    return jsonify(success=True, message=f"{filename} restored to build.")
+
+
+@app.route("/delete-extra/<assignment_id>/<filename>", methods=["POST"])
+def delete_extra_file(assignment_id, filename):
+    """Delete a student-added extra file."""
+    if "student_id" not in session:
+        return jsonify(error="Not authenticated"), 403
+
+    lab = get_lab_config_by_assignment_id(assignment_id)
+    if not lab:
+        return jsonify(error="Unknown assignment"), 400
+
+    # Only allow deleting files that are NOT template files
+    if filename in lab["code_files"] or filename in lab.get("writeup_files", []):
+        return jsonify(error="Use revert for template files"), 400
+
+    filename = secure_filename(filename)
+    student_folder = get_submission_folder(session["student_id"], assignment_id)
+    fpath = os.path.join(student_folder, filename)
+
+    if os.path.isfile(fpath):
+        os.remove(fpath)
+        logging.info(
+            "Student %s deleted extra file %s for assignment %s",
+            session.get("netid"), filename, assignment_id,
+        )
+        return jsonify(success=True, message=f"{filename} deleted.")
+    else:
+        return jsonify(error="File not found"), 404
 
 
 @app.route("/view/<assignment_id>/<filename>")
