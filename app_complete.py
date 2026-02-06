@@ -536,6 +536,17 @@ def compile_status(job_id):
         return jsonify(error="Not found"), 404
     return jsonify(status)
 
+@app.route("/compile-cancel/<job_id>", methods=["POST"])
+def compile_cancel(job_id):
+    if "student_id" not in session:
+        return jsonify(error="Not authenticated"), 403
+
+    result = compile_queue.cancel_job(job_id, session["student_id"])
+    if result["success"]:
+        return jsonify(result)
+    else:
+        return jsonify(result), 400
+
 # =============================================================================
 # MAIN
 # =============================================================================
