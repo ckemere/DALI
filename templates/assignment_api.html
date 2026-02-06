@@ -153,6 +153,22 @@
             background-color: #f57c00;
         }
         
+        .btn-compile {
+            background-color: #7c4dff;
+            color: white;
+            font-size: 15px;
+            padding: 10px 24px;
+        }
+
+        .btn-compile:hover {
+            background-color: #651fff;
+        }
+
+        .btn-compile:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
         .btn-success {
             background-color: #4caf50;
             color: white;
@@ -201,6 +217,62 @@
         .upload-label {
             cursor: pointer;
         }
+
+        /* Compilation section styles */
+        .compile-box {
+            padding: 12px;
+            border-radius: 4px;
+            margin-top: 15px;
+            margin-bottom: 10px;
+        }
+
+        .compile-box.queue {
+            background: #e3f2fd;
+        }
+
+        .compile-box.compiling {
+            background: #fff3cd;
+        }
+
+        .compile-box.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+        }
+
+        .compile-box.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+        }
+
+        .compile-box .title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .compile-box .detail {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .compile-output pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            max-height: 400px;
+            font-size: 13px;
+            line-height: 1.5;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .compile-unavailable {
+            color: #999;
+            font-style: italic;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -215,7 +287,9 @@
         
         <div id="message" class="message"></div>
         
-        <!-- Code Files Section -->
+        <!-- ============================================================ -->
+        <!-- Code Files Section                                           -->
+        <!-- ============================================================ -->
         <div class="section">
             <h2 class="section-title">Code Files</h2>
             
@@ -262,7 +336,9 @@
             {% endfor %}
         </div>
         
-        <!-- Writeup Section -->
+        <!-- ============================================================ -->
+        <!-- Writeup Section                                              -->
+        <!-- ============================================================ -->
         <div class="section">
             <h2 class="section-title">Writeup (Choose TXT or PDF)</h2>
             
@@ -323,10 +399,74 @@
             </div>
             {% endif %}
         </div>
-        
+
+        <!-- ============================================================ -->
+        <!-- Compilation Section                                          -->
+        <!-- ============================================================ -->
+        <div class="section">
+            <h2 class="section-title">Test Compilation</h2>
+            <p style="margin-bottom: 15px; color: #666;">
+                Test your code compiles before submitting. This checks for syntax errors
+                and other compilation issues using the TI ARM toolchain.
+            </p>
+
+            {% if compile_available %}
+            <div id="compile-section">
+                <button id="compile-btn" class="btn btn-compile">
+                    🔨 Test Compilation
+                </button>
+
+                <div id="compile-status" style="display: none;">
+
+                    <!-- Queue position -->
+                    <div id="queue-info" class="compile-box queue" style="display: none;">
+                        <div class="title">⏳ In Queue</div>
+                        <div id="queue-position"></div>
+                        <div id="queue-eta" class="detail"></div>
+                        <button id="cancel-compile-btn" class="btn btn-warning" style="margin-top: 8px;">
+                            Cancel
+                        </button>
+                    </div>
+
+                    <!-- Compiling spinner -->
+                    <div id="compiling-info" class="compile-box compiling" style="display: none;">
+                        <div class="title">⚙️ Compiling…</div>
+                        <div class="detail">This usually takes 5–15 seconds</div>
+                    </div>
+
+                    <!-- Results -->
+                    <div id="compile-results" style="display: none;">
+                        <div id="compile-success" class="compile-box success" style="display: none;">
+                            <div class="title" style="color: #155724;">✓ Compilation Successful!</div>
+                            <div class="detail" style="color: #155724;">Your code compiled without errors.</div>
+                        </div>
+
+                        <div id="compile-error" class="compile-box error" style="display: none;">
+                            <div class="title" style="color: #721c24;">✗ Compilation Failed</div>
+                            <div class="detail" style="color: #721c24;">See errors below:</div>
+                        </div>
+
+                        <div id="compile-output" class="compile-output">
+                            <pre></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <p class="compile-unavailable">
+                ⚠ Compilation service is currently unavailable (Redis not connected).
+            </p>
+            {% endif %}
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Submit Section                                               -->
+        <!-- ============================================================ -->
         <div class="submit-section">
             <p style="margin-bottom: 15px; color: #666;">
-                Ready to submit? This will create a zip file with all your code (uploaded + templates) and your writeup, then upload it to Canvas.
+                Ready to submit? This will create a zip file with all your code
+                (uploaded files + template defaults) and your writeup, then upload
+                it to Canvas.
             </p>
             <button id="submit-btn" class="btn btn-success">Submit to Canvas</button>
         </div>
@@ -335,7 +475,9 @@
     <script>
         const assignmentId = '{{ assignment_id }}';
         
-        // Handle file uploads
+        // ================================================================
+        // File upload handling
+        // ================================================================
         document.querySelectorAll('.file-input').forEach(input => {
             input.addEventListener('change', async (e) => {
                 const file = e.target.files[0];
@@ -345,7 +487,7 @@
                 const formData = new FormData();
                 formData.append('file', file);
                 
-                showMessage('Uploading...', 'success');
+                showMessage('Uploading…', 'success');
                 
                 try {
                     const response = await fetch(`/upload/${assignmentId}/${filename}`, {
@@ -367,21 +509,21 @@
             });
         });
         
-        // Handle revert to template
+        // ================================================================
+        // Revert to template
+        // ================================================================
         document.querySelectorAll('.revert-btn').forEach(button => {
             button.addEventListener('click', async (e) => {
                 const filename = e.target.dataset.filename;
                 
-                if (!confirm(`Are you sure you want to revert ${filename} to the template version? Your uploaded code will be deleted.`)) {
+                if (!confirm(`Revert ${filename} to the template version? Your uploaded code will be deleted.`)) {
                     return;
                 }
                 
                 try {
                     const response = await fetch(`/revert/${assignmentId}/${filename}`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        }
+                        headers: { 'Content-Type': 'application/json' }
                     });
                     
                     const result = await response.json();
@@ -398,22 +540,22 @@
             });
         });
         
-        // Handle submission
+        // ================================================================
+        // Canvas submission
+        // ================================================================
         document.getElementById('submit-btn').addEventListener('click', async () => {
-            if (!confirm('Are you sure you want to submit? This will upload a zip file with all your code and writeup to Canvas.')) {
+            if (!confirm('Submit to Canvas? This will upload a zip with all your code and writeup.')) {
                 return;
             }
             
             const submitBtn = document.getElementById('submit-btn');
             submitBtn.disabled = true;
-            submitBtn.textContent = 'Submitting...';
+            submitBtn.textContent = 'Submitting…';
             
             try {
                 const response = await fetch(`/submit/${assignmentId}`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'Content-Type': 'application/json' }
                 });
                 
                 const result = await response.json();
@@ -433,16 +575,169 @@
             }
         });
         
+        // ================================================================
+        // Compilation
+        // ================================================================
+        (function() {
+            const compileBtn = document.getElementById('compile-btn');
+            if (!compileBtn) return;  // compile not available
+
+            const compileStatus = document.getElementById('compile-status');
+            const queueInfo     = document.getElementById('queue-info');
+            const compilingInfo = document.getElementById('compiling-info');
+            const compileResults = document.getElementById('compile-results');
+            const cancelBtn     = document.getElementById('cancel-compile-btn');
+
+            let currentJobId = null;
+            let pollInterval = null;
+
+            // Start compilation
+            compileBtn.addEventListener('click', async () => {
+                compileBtn.disabled = true;
+                compileBtn.textContent = 'Starting…';
+                compileStatus.style.display = 'block';
+                hideAllCompileStatus();
+
+                try {
+                    const resp = await fetch(`/compile/${assignmentId}`, { method: 'POST' });
+                    const data = await resp.json();
+
+                    if (data.success) {
+                        currentJobId = data.job_id;
+                        startPolling();
+                    } else {
+                        showMessage(data.error || 'Failed to start compilation', 'error');
+                        resetCompileBtn();
+                    }
+                } catch (err) {
+                    showMessage('Error starting compilation: ' + err.message, 'error');
+                    resetCompileBtn();
+                }
+            });
+
+            // Cancel
+            cancelBtn.addEventListener('click', async () => {
+                if (!currentJobId || !confirm('Cancel this compilation?')) return;
+
+                try {
+                    const resp = await fetch(`/compile-cancel/${currentJobId}`, { method: 'POST' });
+                    const data = await resp.json();
+
+                    if (data.success) {
+                        showMessage('Compilation cancelled.', 'success');
+                        stopPolling();
+                        resetCompileBtn();
+                    } else {
+                        showMessage(data.error || 'Failed to cancel', 'error');
+                    }
+                } catch (err) {
+                    showMessage('Error cancelling: ' + err.message, 'error');
+                }
+            });
+
+            function startPolling() {
+                pollInterval = setInterval(checkStatus, 1000);
+                checkStatus();
+            }
+
+            function stopPolling() {
+                if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+            }
+
+            async function checkStatus() {
+                if (!currentJobId) return;
+
+                try {
+                    const resp = await fetch(`/compile-status/${currentJobId}`);
+                    const s = await resp.json();
+
+                    switch (s.status) {
+                        case 'queued':
+                            showQueueStatus(s);
+                            break;
+                        case 'compiling':
+                            showCompilingStatus();
+                            break;
+                        case 'complete':
+                        case 'failed':
+                            stopPolling();
+                            showCompileResults(s);
+                            resetCompileBtn();
+                            break;
+                        case 'cancelled':
+                            stopPolling();
+                            showMessage('Compilation was cancelled.', 'success');
+                            resetCompileBtn();
+                            break;
+                    }
+                } catch (err) {
+                    console.error('Status poll error:', err);
+                }
+            }
+
+            function hideAllCompileStatus() {
+                queueInfo.style.display = 'none';
+                compilingInfo.style.display = 'none';
+                compileResults.style.display = 'none';
+                document.getElementById('compile-success').style.display = 'none';
+                document.getElementById('compile-error').style.display = 'none';
+            }
+
+            function showQueueStatus(s) {
+                hideAllCompileStatus();
+                queueInfo.style.display = 'block';
+                const pos = s.position || 0;
+                const eta = s.estimated_wait || 0;
+                document.getElementById('queue-position').textContent =
+                    `Position in queue: #${pos}`;
+                document.getElementById('queue-eta').textContent =
+                    eta > 0 ? `Estimated wait: ~${Math.ceil(eta)}s` : 'Starting soon…';
+            }
+
+            function showCompilingStatus() {
+                hideAllCompileStatus();
+                compilingInfo.style.display = 'block';
+            }
+
+            function showCompileResults(s) {
+                hideAllCompileStatus();
+                compileResults.style.display = 'block';
+
+                const result = s.result || {};
+
+                if (result.success) {
+                    document.getElementById('compile-success').style.display = 'block';
+                    const output = result.stdout || 'Compilation completed successfully.';
+                    document.querySelector('#compile-output pre').textContent = output;
+                } else {
+                    document.getElementById('compile-error').style.display = 'block';
+                    // Show stderr first (compiler errors), fall back to stdout or error msg
+                    let output = '';
+                    if (result.stderr)  output += result.stderr;
+                    if (result.stdout)  output += (output ? '\n\n--- stdout ---\n' : '') + result.stdout;
+                    if (!output)        output = result.error || 'Unknown error';
+                    document.querySelector('#compile-output pre').textContent = output;
+                }
+            }
+
+            function resetCompileBtn() {
+                compileBtn.disabled = false;
+                compileBtn.textContent = '🔨 Test Compilation';
+                currentJobId = null;
+            }
+        })();
+
+        // ================================================================
+        // Shared message helper
+        // ================================================================
         function showMessage(text, type) {
-            const messageDiv = document.getElementById('message');
-            messageDiv.textContent = text;
-            messageDiv.className = 'message ' + type;
-            messageDiv.style.display = 'block';
+            const el = document.getElementById('message');
+            el.textContent = text;
+            el.className = 'message ' + type;
+            el.style.display = 'block';
             
-            if (type === 'success' && !text.includes('...')) {
-                setTimeout(() => {
-                    messageDiv.style.display = 'none';
-                }, 5000);
+            if (type === 'success' && !text.includes('…')) {
+                setTimeout(() => { el.style.display = 'none'; }, 5000);
             }
         }
     </script>
