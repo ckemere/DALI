@@ -12,6 +12,9 @@ from flask import (
 from werkzeug.utils import secure_filename
 import requests
 
+import csv
+import hmac
+
 from compile_queue import CompilationQueue
 
 # =============================================================================
@@ -32,7 +35,7 @@ ADMIN_PASSWORD = require_env("ADMIN_PASSWORD")
 CANVAS_BASE_URL = os.environ.get("CANVAS_BASE_URL", "https://canvas.rice.edu")
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
-GRADEBOOK_CSV_PATH = os.environ.get("GRADEBOOK_CSV_PATH", "gradebook.csv")
+ROSTER_CSV_PATH = os.environ.get("ROSTER_CSV_PATH", "student_passwords.csv")
 
 UPLOAD_FOLDER = "uploads"
 TEMPLATE_FOLDER = "template_files"
@@ -41,6 +44,56 @@ ALLOWED_DOC_EXTENSIONS = {"txt", "pdf"}
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(TEMPLATE_FOLDER, exist_ok=True)
+
+# =============================================================================
+# STUDENT ROSTER (loaded from CSV)
+# =============================================================================
+
+# Keyed by netid → { "netid", "name", "canvas_id", "password" }
+STUDENT_ROSTER = {}
+
+def load_roster(csv_path):
+    """Load student roster from CSV. Called at startup."""
+    global STUDENT_ROSTER
+    STUDENT_ROSTER = {}
+
+    if not os.path.isfile(csv_path):
+        logging.warning("Roster CSV not found at %s — no students can log in!", csv_path)
+        return 0
+
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            netid = row["netid"].strip().lower()
+            STUDENT_ROSTER[netid] = {
+                "netid": netid,
+                "name": row["name"].strip(),
+                "canvas_id": row["canvas_id"].strip(),
+                "password": row["password"].strip(),
+            }
+
+    logging.info("Loaded %d students from %s", len(STUDENT_ROSTER), csv_path)
+    return len(STUDENT_ROSTER)
+
+load_roster(ROSTER_CSV_PATH)
+
+
+def authenticate_student(netid, password):
+    """
+    Validate netid + password against the roster.
+    Returns the student dict on success, None on failure.
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    netid = netid.strip().lower()
+    student = STUDENT_ROSTER.get(netid)
+    if not student:
+        # Still do a comparison to keep timing constant
+        hmac.compare_digest(password, "dummy_password_placeholder")
+        return None
+
+    if hmac.compare_digest(password, student["password"]):
+        return student
+    return None
 
 # =============================================================================
 # FLASK APP
@@ -235,13 +288,18 @@ def canvas_api_request(endpoint, method="GET", data=None, files=None):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        sid = request.form.get("student_id")
-        name = request.form.get("student_name")
-        if sid and name:
-            session["student_id"] = sid
-            session["student_name"] = name
+        netid = request.form.get("netid", "")
+        password = request.form.get("password", "")
+
+        student = authenticate_student(netid, password)
+        if student:
+            session["student_id"] = student["canvas_id"]
+            session["student_name"] = student["name"]
+            session["netid"] = student["netid"]
+            logging.info("Login: %s (%s)", student["netid"], student["name"])
             return redirect(url_for("home"))
-        flash("Student ID and name required")
+
+        flash("Invalid NetID or password.")
     return render_template("login_api.html")
 
 @app.route("/logout")
@@ -520,6 +578,7 @@ def compile_start(assignment_id):
     job_id = compile_queue.submit_job(
         student_id=session["student_id"],
         student_name=session["student_name"],
+        netid=session.get("netid", ""),
         assignment_id=assignment_id,
         assignment_name=assignment_data["name"],
         lab_config=json.dumps(lab),   # serialize for Redis
@@ -611,6 +670,15 @@ def admin_queue_data():
         compiling_count=compiling_count,
     )
 
+@app.route("/admin/reload-roster", methods=["POST"])
+def admin_reload_roster():
+    """Reload the student roster CSV without restarting the server."""
+    if not session.get("admin_authenticated"):
+        return jsonify(error="Not authenticated"), 403
+
+    count = load_roster(ROSTER_CSV_PATH)
+    return jsonify(success=True, students_loaded=count)
+
 # =============================================================================
 # ROUTES – DEBUG / HEALTH
 # =============================================================================
@@ -634,6 +702,7 @@ def health():
         redis_connected=redis_ok,
         queued_jobs=queue_len,
         active_jobs=active_count,
+        roster_loaded=len(STUDENT_ROSTER),
     )
 
 # =============================================================================
