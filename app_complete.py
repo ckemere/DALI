@@ -548,6 +548,95 @@ def compile_cancel(job_id):
         return jsonify(result), 400
 
 # =============================================================================
+# ROUTES – ADMIN
+# =============================================================================
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == ADMIN_PASSWORD:
+            session["admin_authenticated"] = True
+            return redirect(url_for("admin_compile_queue"))
+        flash("Invalid password")
+    return render_template("admin_login.html")
+
+@app.route("/admin/compile-queue")
+def admin_compile_queue():
+    """Admin dashboard for the compilation queue."""
+    # Check auth: via session or query param (for initial login from admin_login.html)
+    password_param = request.args.get("password")
+    if password_param:
+        if password_param == ADMIN_PASSWORD:
+            session["admin_authenticated"] = True
+        else:
+            flash("Invalid password")
+            return render_template("admin_login.html")
+
+    if not session.get("admin_authenticated"):
+        return render_template("admin_login.html")
+
+    if not compile_queue.is_available():
+        flash("Compilation queue unavailable (Redis not connected)")
+        jobs, queued_count, compiling_count = [], 0, 0
+    else:
+        jobs = compile_queue.get_full_queue()
+        queued_count = len([j for j in jobs if j.get("state") == "queued"])
+        compiling_count = len([j for j in jobs if j.get("state") == "compiling"])
+
+    return render_template(
+        "admin_queue.html",
+        jobs=jobs,
+        queued_count=queued_count,
+        compiling_count=compiling_count,
+        max_workers=compile_queue.max_workers,
+    )
+
+@app.route("/admin/compile-queue/data")
+def admin_queue_data():
+    """JSON endpoint for AJAX auto-refresh of the admin dashboard."""
+    if not session.get("admin_authenticated"):
+        return jsonify(error="Not authenticated"), 403
+
+    if not compile_queue.is_available():
+        return jsonify(jobs=[], queued_count=0, compiling_count=0)
+
+    jobs = compile_queue.get_full_queue()
+    queued_count = len([j for j in jobs if j.get("state") == "queued"])
+    compiling_count = len([j for j in jobs if j.get("state") == "compiling"])
+
+    return jsonify(
+        jobs=jobs,
+        queued_count=queued_count,
+        compiling_count=compiling_count,
+    )
+
+# =============================================================================
+# ROUTES – DEBUG / HEALTH
+# =============================================================================
+
+@app.route("/health")
+def health():
+    """Quick health check endpoint for monitoring."""
+    redis_ok = compile_queue.is_available()
+    queue_len = 0
+    active_count = 0
+
+    if redis_ok:
+        try:
+            queue_len = compile_queue.redis.llen("compile_queue")
+            active_count = compile_queue.redis.scard("compile_active")
+        except Exception:
+            pass
+
+    return jsonify(
+        status="ok",
+        redis_connected=redis_ok,
+        queued_jobs=queue_len,
+        active_jobs=active_count,
+    )
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
