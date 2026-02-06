@@ -26,6 +26,8 @@ CFLAGS = [
     f'-D__{DEVICE_NAME}__',
     '-g',  # Debug symbols
     f'-I{TI_SDK_ROOT}/source',  # SDK headers
+    f'-I{TI_SDK_ROOT}/source/third_party/CMSIS/Core/Include',  # CMSIS headers
+    f'-I{TI_SDK_ROOT}/source/ti/devices/msp/m0p/mspm0g350x',  # Device-specific headers
 ]
 
 # Linker flags
