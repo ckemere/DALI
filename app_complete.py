@@ -14,6 +14,7 @@ import requests
 
 import csv
 import hmac
+import hashlib
 
 from compile_queue import CompilationQueue
 
@@ -35,7 +36,7 @@ ADMIN_PASSWORD = require_env("ADMIN_PASSWORD")
 CANVAS_BASE_URL = os.environ.get("CANVAS_BASE_URL", "https://canvas.rice.edu")
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
-ROSTER_CSV_PATH = os.environ.get("ROSTER_CSV_PATH", "student_passwords.csv")
+GRADEBOOK_CSV_PATH = os.environ.get("GRADEBOOK_CSV_PATH", "gradebook.csv")
 
 UPLOAD_FOLDER = "uploads"
 TEMPLATE_FOLDER = "template_files"
@@ -75,7 +76,7 @@ def load_roster(csv_path):
     logging.info("Loaded %d students from %s", len(STUDENT_ROSTER), csv_path)
     return len(STUDENT_ROSTER)
 
-load_roster(ROSTER_CSV_PATH)
+load_roster(GRADEBOOK_CSV_PATH)
 
 
 def authenticate_student(netid, password):
@@ -296,6 +297,10 @@ def login():
             session["student_id"] = student["canvas_id"]
             session["student_name"] = student["name"]
             session["netid"] = student["netid"]
+            # Store a fingerprint so we can detect password changes
+            session["_pw_fp"] = hashlib.sha256(
+                student["password"].encode()
+            ).hexdigest()[:16]
             logging.info("Login: %s (%s)", student["netid"], student["name"])
             return redirect(url_for("home"))
 
@@ -306,6 +311,35 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+# ---- Session validation ----
+# If the roster is reloaded and a student's password changes (or they're
+# removed), their existing session is invalidated on the next request.
+
+@app.before_request
+def validate_session():
+    """Check that the logged-in student still has valid credentials."""
+    # Skip for routes that don't need auth
+    if request.endpoint in ("login", "logout", "health", "admin_login", "static", None):
+        return
+
+    netid = session.get("netid")
+    if not netid:
+        return  # not logged in as a student; admin routes handle their own auth
+
+    student = STUDENT_ROSTER.get(netid)
+    if not student or student["canvas_id"] != session.get("student_id"):
+        # Student removed from roster or canvas_id changed
+        session.clear()
+        flash("Your session has expired. Please log in again.")
+        return redirect(url_for("login"))
+
+    # Check password fingerprint — invalidates session if password was changed
+    current_fp = hashlib.sha256(student["password"].encode()).hexdigest()[:16]
+    if session.get("_pw_fp") != current_fp:
+        session.clear()
+        flash("Your password has been changed. Please log in again.")
+        return redirect(url_for("login"))
 
 # =============================================================================
 # ROUTES – MAIN
@@ -477,8 +511,8 @@ def view_template(lab_name, filename):
 @app.route("/submit/<assignment_id>", methods=["POST"])
 def submit(assignment_id):
     """
-    Build a zip of template + student files, then upload to Canvas
-    as a submission for this assignment.
+    Build a zip of template + student files, then upload it to Canvas
+    as a submission comment attachment.
     """
     if "student_id" not in session:
         return jsonify(error="Not authenticated"), 403
@@ -499,15 +533,17 @@ def submit(assignment_id):
 
     try:
         zip_buf = create_submission_zip(student_folder, lab)
-        zip_filename = f"{lab['display_name'].replace(' ', '_')}_{session['student_id']}.zip"
-
-        # ---- Canvas file-upload workflow (3 steps) ----
-
-        # Step 1: Tell Canvas we want to upload a file for this submission
+        netid = session.get("netid", session["student_id"])
+        zip_filename = f"{lab['display_name'].replace(' ', '_')}_{netid}.zip"
         student_id = session["student_id"]
+
+        # ---- Canvas submission-comment file upload (3 steps) ----
+
+        # Step 1: Preflight — tell Canvas we want to upload a file
+        #         for a submission comment
         preflight = canvas_api_request(
             f"courses/{COURSE_ID}/assignments/{assignment_id}"
-            f"/submissions/{student_id}/files",
+            f"/submissions/{student_id}/comments/files",
             method="POST",
             data={
                 "name": zip_filename,
@@ -519,7 +555,7 @@ def submit(assignment_id):
         upload_url = preflight["upload_url"]
         upload_params = preflight.get("upload_params", {})
 
-        # Step 2: POST the file to the URL Canvas gave us
+        # Step 2: Upload the actual file to the URL Canvas gave us
         zip_buf.seek(0)
         resp = requests.post(
             upload_url,
@@ -531,26 +567,42 @@ def submit(assignment_id):
         file_data = resp.json()
         file_id = file_data["id"]
 
-        # Step 3: Create the submission referencing the uploaded file
+        # Step 3: Create the submission comment with the file attached
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         canvas_api_request(
-            f"courses/{COURSE_ID}/assignments/{assignment_id}/submissions",
-            method="POST",
+            f"courses/{COURSE_ID}/assignments/{assignment_id}"
+            f"/submissions/{student_id}",
+            method="PUT",
             data={
-                "submission": {
-                    "submission_type": "online_upload",
+                "comment": {
+                    "text_comment": f"Submitted via DALI at {timestamp}",
                     "file_ids": [file_id],
                 }
             },
         )
 
         logging.info(
-            "Student %s submitted assignment %s (file_id=%s)",
-            student_id, assignment_id, file_id,
+            "Student %s (%s) submitted assignment %s as comment (file_id=%s)",
+            netid, student_id, assignment_id, file_id,
         )
         return jsonify(success=True, message="Submitted successfully to Canvas!")
 
+    except requests.exceptions.HTTPError as e:
+        # Log the Canvas error response for debugging
+        error_body = ""
+        if e.response is not None:
+            try:
+                error_body = e.response.json()
+            except Exception:
+                error_body = e.response.text[:500]
+        logging.error(
+            "Canvas API error for student %s on assignment %s: %s — %s",
+            session.get("netid"), assignment_id, e, error_body,
+        )
+        return jsonify(error=f"Canvas rejected the submission: {e}"), 500
+
     except Exception as e:
-        logging.error("Submission failed for student %s: %s", session["student_id"], e)
+        logging.error("Submission failed for student %s: %s", session.get("netid"), e)
         return jsonify(error=f"Submission failed: {str(e)}"), 500
 
 # =============================================================================
@@ -676,7 +728,7 @@ def admin_reload_roster():
     if not session.get("admin_authenticated"):
         return jsonify(error="Not authenticated"), 403
 
-    count = load_roster(ROSTER_CSV_PATH)
+    count = load_roster(GRADEBOOK_CSV_PATH)
     return jsonify(success=True, students_loaded=count)
 
 # =============================================================================
