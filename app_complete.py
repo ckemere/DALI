@@ -15,6 +15,7 @@ import requests
 import csv
 import hmac
 import hashlib
+import yaml
 
 from compile_queue import CompilationQueue
 
@@ -112,24 +113,82 @@ logging.basicConfig(
 )
 
 # =============================================================================
-# LAB CONFIGURATION
+# LAB CONFIGURATION (auto-discovered from template_files/*/lab.yaml)
 # =============================================================================
 
-LAB_CONFIGS = {
-    "505415": {   # Canvas assignment ID
-        "display_name": "Lab 3",
-        "template_dir": "lab3",
-        "code_files": [
-            "hw_interface.c",
-            "hw_interface.h",
-            "lab3.c",
-            "startup_mspm0g350x_ticlang.c",
-            "state_machine_logic.c",
-            "state_machine_logic.h",
-        ],
-        "writeup_files": ["writeup.txt", "writeup.pdf"],
-    },
-}
+def load_lab_configs(template_folder):
+    """
+    Scan template_files/ for subdirectories containing a lab.yaml.
+    Each lab.yaml must have:
+        display_name: "Lab 3"
+        canvas_assignment_id: "505415"
+    And optionally:
+        writeup_files:
+          - writeup.txt
+          - writeup.pdf
+
+    Code files (.c, .h) are auto-discovered from the directory contents.
+    Other files (.cmd, etc.) are treated as build infrastructure — copied
+    into builds automatically but not shown to students as editable.
+    """
+    configs = {}
+
+    if not os.path.isdir(template_folder):
+        logging.warning("Template folder %s not found", template_folder)
+        return configs
+
+    for dirname in sorted(os.listdir(template_folder)):
+        lab_dir = os.path.join(template_folder, dirname)
+        yaml_path = os.path.join(lab_dir, "lab.yaml")
+
+        if not os.path.isfile(yaml_path):
+            continue
+
+        try:
+            with open(yaml_path, "r") as f:
+                meta = yaml.safe_load(f)
+        except Exception as e:
+            logging.error("Failed to parse %s: %s", yaml_path, e)
+            continue
+
+        if not meta or not isinstance(meta, dict):
+            logging.error("Invalid lab.yaml in %s — must be a YAML mapping", dirname)
+            continue
+
+        assignment_id = str(meta.get("canvas_assignment_id", "")).strip()
+        display_name = meta.get("display_name", dirname)
+
+        if not assignment_id:
+            logging.error("lab.yaml in %s missing canvas_assignment_id — skipping", dirname)
+            continue
+
+        # Auto-discover code files from directory contents
+        code_files = sorted(
+            f for f in os.listdir(lab_dir)
+            if f.endswith((".c", ".h")) and f != "lab.yaml"
+        )
+
+        writeup_files = meta.get("writeup_files", ["writeup.txt", "writeup.pdf"])
+
+        configs[assignment_id] = {
+            "display_name": display_name,
+            "template_dir": dirname,
+            "code_files": code_files,
+            "writeup_files": writeup_files,
+        }
+
+        logging.info(
+            "Loaded lab: %s (%s) — %d code files, assignment_id=%s",
+            display_name, dirname, len(code_files), assignment_id,
+        )
+
+    if not configs:
+        logging.warning("No lab configurations found in %s/", template_folder)
+
+    return configs
+
+
+LAB_CONFIGS = load_lab_configs(TEMPLATE_FOLDER)
 
 # =============================================================================
 # QUEUE CLIENT (NO WORKERS HERE)
@@ -934,6 +993,17 @@ def admin_reload_roster():
     count = load_roster(ROSTER_CSV_PATH)
     return jsonify(success=True, students_loaded=count)
 
+@app.route("/admin/reload-labs", methods=["POST"])
+def admin_reload_labs():
+    """Rescan template_files/ for lab.yaml configs without restarting."""
+    global LAB_CONFIGS
+    if not session.get("admin_authenticated"):
+        return jsonify(error="Not authenticated"), 403
+
+    LAB_CONFIGS = load_lab_configs(TEMPLATE_FOLDER)
+    labs = {aid: cfg["display_name"] for aid, cfg in LAB_CONFIGS.items()}
+    return jsonify(success=True, labs_loaded=len(LAB_CONFIGS), labs=labs)
+
 # =============================================================================
 # ROUTES – DEBUG / HEALTH
 # =============================================================================
@@ -958,6 +1028,7 @@ def health():
         queued_jobs=queue_len,
         active_jobs=active_count,
         roster_loaded=len(STUDENT_ROSTER),
+        labs_loaded={aid: cfg["display_name"] for aid, cfg in LAB_CONFIGS.items()},
     )
 
 # =============================================================================

@@ -46,18 +46,19 @@ dali/
 │   ├── view_file.html
 │   ├── admin_queue.html
 │   └── admin_login.html
-├── template_files/              # Lab template source files
+├── template_files/              # Lab templates (auto-discovered)
 │   └── lab3/
-│       ├── hw_interface.c
+│       ├── lab.yaml             # Lab config (display name, assignment ID, writeup files)
+│       ├── hw_interface.c       # Auto-discovered as code file
 │       ├── hw_interface.h
 │       ├── lab3.c
 │       ├── startup_mspm0g350x_ticlang.c
 │       ├── state_machine_logic.c
 │       ├── state_machine_logic.h
-│       └── mspm0g3507.cmd
+│       └── mspm0g3507.cmd       # Auto-copied as build infrastructure
 └── uploads/                     # Student submissions (auto-created)
     └── student_{canvas_id}/
-        └── assignment_{assignment_id}/
+        └── assignment_{id}/
 ```
 
 ---
@@ -145,33 +146,32 @@ python3 compile_worker_main.py
 
 ## Lab Configuration
 
-Labs are defined in `LAB_CONFIGS` in `app_complete.py`, keyed by **Canvas assignment ID**:
-
-```python
-LAB_CONFIGS = {
-    "505415": {                          # Canvas assignment ID (string)
-        "display_name": "Lab 3",
-        "template_dir": "lab3",          # subdirectory under template_files/
-        "code_files": [
-            "hw_interface.c",
-            "hw_interface.h",
-            "lab3.c",
-            "startup_mspm0g350x_ticlang.c",
-            "state_machine_logic.c",
-            "state_machine_logic.h",
-        ],
-        "writeup_files": ["writeup.txt", "writeup.pdf"],
-    },
-}
-```
+Labs are auto-discovered from `template_files/`. Each lab is a subdirectory containing a `lab.yaml` file and the template source files.
 
 **To add a new lab:**
 
-1. Find the Canvas assignment ID (from the URL: `/courses/.../assignments/XXXXXX`)
-2. Add an entry to `LAB_CONFIGS` with that ID as the key
-3. Create `template_files/<template_dir>/` with all source files and the linker script (`.cmd`)
-4. List every file students might modify in `code_files`
-5. Students see template defaults for any file they haven't uploaded
+1. Create a directory: `mkdir template_files/lab4`
+2. Drop in all source files (`.c`, `.h`) and the linker script (`.cmd`)
+3. Create `lab.yaml`:
+
+```yaml
+# template_files/lab4/lab.yaml
+display_name: "Lab 4"
+canvas_assignment_id: "507123"
+writeup_files:
+  - writeup.txt
+  - writeup.pdf
+```
+
+That's it. On startup (or via `POST /admin/reload-labs`), DALI scans `template_files/*/lab.yaml` and auto-discovers:
+
+- **Code files**: all `.c` and `.h` files in the directory — shown to students as uploadable/editable
+- **Infrastructure files**: everything else (`.cmd`, etc.) — copied into builds automatically, not shown to students
+- **Writeup files**: listed in the YAML since they don't exist in the template directory
+
+The `canvas_assignment_id` is the numeric ID from the Canvas assignment URL (`/courses/.../assignments/XXXXXX`). Only assignments with a matching lab config appear on the student home page.
+
+Students can also upload additional `.c`/`.h` files not in the template, or exclude template files they don't need.
 
 ---
 
@@ -179,11 +179,11 @@ LAB_CONFIGS = {
 
 When a student clicks "Submit to Canvas":
 
-1. A zip is built merging template files with any student uploads (student files override templates)
+1. A zip is built from: template files (minus any the student excluded) + student uploads + any extra files the student added + writeup
 2. The zip is uploaded to Canvas as a **submission comment attachment** on the assignment
 3. The comment includes a timestamp
 
-At compile time, the same merge happens into a temp directory, a Makefile is generated, and `make` runs with the TI toolchain flags.
+At compile time, the same merge happens into a temp directory, a Makefile is generated from all `.c` files present, and `make` runs with the TI toolchain flags.
 
 ---
 
@@ -192,15 +192,21 @@ At compile time, the same merge happens into a temp directory, a Makefile is gen
 | Endpoint | Description |
 |---|---|
 | `/login` | Student login (NetID + password) |
-| `/` | Assignment list |
+| `/` | Assignment list (filtered to configured labs) |
 | `/assignment/<id>` | Upload files, compile, submit |
+| `/upload/<id>/<filename>` | Upload/replace a file (POST) |
+| `/upload-extra/<id>` | Add a new .c/.h file (POST) |
+| `/exclude/<id>/<filename>` | Exclude a template file from build (POST) |
+| `/restore/<id>/<filename>` | Restore an excluded file (POST) |
+| `/delete-extra/<id>/<filename>` | Delete a student-added file (POST) |
 | `/compile/<id>` | Start compilation (POST) |
 | `/compile-status/<job_id>` | Poll compilation status |
 | `/compile-cancel/<job_id>` | Cancel queued job (POST) |
 | `/submit/<id>` | Submit to Canvas (POST) |
 | `/admin/compile-queue` | Admin dashboard |
-| `/admin/reload-roster` | Reload CSV without restart (POST) |
-| `/health` | Health check (Redis status, queue depth, roster count) |
+| `/admin/reload-roster` | Reload student CSV (POST) |
+| `/admin/reload-labs` | Rescan lab.yaml configs (POST) |
+| `/health` | Health check (Redis, queue, roster, labs) |
 
 ---
 
