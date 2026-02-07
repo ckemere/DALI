@@ -16,6 +16,7 @@ import csv
 import hmac
 import hashlib
 import yaml
+import markdown as md_lib
 
 from compile_queue import CompilationQueue
 
@@ -175,6 +176,7 @@ def load_lab_configs(template_folder):
             "template_dir": dirname,
             "code_files": code_files,
             "writeup_files": writeup_files,
+            "instructions": meta.get("instructions", ""),
         }
 
         logging.info(
@@ -510,6 +512,10 @@ def assignment(assignment_id):
     student_folder = get_submission_folder(session["student_id"], assignment_id)
     file_status = build_uploaded_files_status(student_folder, lab)
 
+    # Render markdown instructions to HTML (empty string if none)
+    instructions_raw = lab.get("instructions", "")
+    instructions_html = md_lib.markdown(instructions_raw) if instructions_raw else ""
+
     return render_template(
         "assignment_api.html",
         assignment_id=assignment_id,
@@ -521,6 +527,7 @@ def assignment(assignment_id):
         template_files=file_status["template_files"],
         extra_files=file_status["extra_files"],
         writeup_status=file_status["writeup_files"],
+        instructions=instructions_html,
         compile_available=compile_queue.is_available(),
     )
 
