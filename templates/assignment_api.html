@@ -137,6 +137,27 @@
             margin-top: 10px; white-space: pre-wrap; word-wrap: break-word;
         }
         .compile-unavailable { color: #999; font-style: italic; font-size: 13px; }
+
+        .instructions {
+            background-color: #f0f7ff;
+            border: 1px solid #c2daf0;
+            border-radius: 6px;
+            padding: 16px 20px;
+            margin-bottom: 30px;
+            font-size: 14px;
+            color: #333;
+            line-height: 1.6;
+        }
+        .instructions p { margin-bottom: 8px; }
+        .instructions p:last-child { margin-bottom: 0; }
+        .instructions code {
+            background: #e4edf5;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+        .instructions ul, .instructions ol { margin: 8px 0 8px 24px; }
+        .instructions a { color: #1a73e8; }
     </style>
 </head>
 <body>
@@ -150,6 +171,15 @@
         </header>
 
         <div id="message" class="message"></div>
+
+        <!-- ============================================================ -->
+        <!-- Instructions (optional, from lab.yaml)                       -->
+        <!-- ============================================================ -->
+        {% if instructions %}
+        <div class="instructions">
+            {{ instructions|safe }}
+        </div>
+        {% endif %}
 
         <!-- ============================================================ -->
         <!-- Template Code Files                                          -->
