@@ -124,7 +124,7 @@ ts1000,"Student, Test",106586,X_ODy9#ZCOnP
 jd2000,"Doe, Jane",108842,kR7$mPqW2xNv
 ```
 
-Students log in with their NetID and the password you assign. The roster can be reloaded without restarting via `POST /admin/reload-roster`.
+Students log in with their NetID and the password you assign. After changing the roster or lab configs, reload gunicorn: `kill -HUP $(cat gunicorn.pid)` or restart it.
 
 ### Run
 
@@ -204,8 +204,6 @@ At compile time, the same merge happens into a temp directory, a Makefile is gen
 | `/compile-cancel/<job_id>` | Cancel queued job (POST) |
 | `/submit/<id>` | Submit to Canvas (POST) |
 | `/admin/compile-queue` | Admin dashboard |
-| `/admin/reload-roster` | Reload student CSV (POST) |
-| `/admin/reload-labs` | Rescan lab.yaml configs (POST) |
 | `/health` | Health check (Redis, queue, roster, labs) |
 
 ---

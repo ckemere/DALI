@@ -991,25 +991,6 @@ def admin_queue_data():
         compiling_count=compiling_count,
     )
 
-@app.route("/admin/reload-roster", methods=["POST"])
-def admin_reload_roster():
-    """Reload the student roster CSV without restarting the server."""
-    if not session.get("admin_authenticated"):
-        return jsonify(error="Not authenticated"), 403
-
-    count = load_roster(ROSTER_CSV_PATH)
-    return jsonify(success=True, students_loaded=count)
-
-@app.route("/admin/reload-labs", methods=["POST"])
-def admin_reload_labs():
-    """Rescan template_files/ for lab.yaml configs without restarting."""
-    global LAB_CONFIGS
-    if not session.get("admin_authenticated"):
-        return jsonify(error="Not authenticated"), 403
-
-    LAB_CONFIGS = load_lab_configs(TEMPLATE_FOLDER)
-    labs = {aid: cfg["display_name"] for aid, cfg in LAB_CONFIGS.items()}
-    return jsonify(success=True, labs_loaded=len(LAB_CONFIGS), labs=labs)
 
 # =============================================================================
 # ROUTES – DEBUG / HEALTH
