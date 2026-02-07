@@ -177,6 +177,7 @@ def load_lab_configs(template_folder):
             "code_files": code_files,
             "writeup_files": writeup_files,
             "instructions": meta.get("instructions", ""),
+            "scoring": meta.get("scoring", None),
         }
 
         logging.info(
@@ -265,6 +266,8 @@ def build_uploaded_files_status(student_folder, lab_config):
         for fname in sorted(os.listdir(student_folder)):
             if fname in known_files or fname.endswith(".excluded"):
                 continue
+            if fname.startswith("_compile_status"):
+                continue
             ext = fname.rsplit(".", 1)[1].lower() if "." in fname else ""
             if ext in ALLOWED_CODE_EXTENSIONS:
                 stat = os.stat(os.path.join(student_folder, fname))
@@ -312,10 +315,80 @@ def get_extra_files(student_folder, lab_config):
         for fname in sorted(os.listdir(student_folder)):
             if fname in known or fname.endswith(".excluded"):
                 continue
+            if fname.startswith("_compile_status"):
+                continue
             ext = fname.rsplit(".", 1)[1].lower() if "." in fname else ""
             if ext in ALLOWED_CODE_EXTENSIONS:
                 extras.append(fname)
     return extras
+
+
+# -- Compile status tracking --------------------------------------------------
+# A JSON file in the student folder records the last compile result along with
+# a fingerprint of the file state at compile time.  If files change after
+# compilation, the fingerprint won't match and the UI shows "not tested."
+
+COMPILE_STATUS_FILE = "_compile_status.json"
+
+def compute_file_fingerprint(student_folder, lab_config):
+    """
+    Compute a hash representing the current state of all code files
+    (template overrides, exclusions, extras).  Any change to the set of
+    files or their contents invalidates the fingerprint.
+    """
+    h = hashlib.sha256()
+    excluded = get_excluded_files(student_folder)
+
+    # Template files: record name + whether excluded + mtime if uploaded
+    for fname in lab_config["code_files"]:
+        if fname in excluded:
+            h.update(f"{fname}:excluded\n".encode())
+        else:
+            fpath = os.path.join(student_folder, fname)
+            if os.path.isfile(fpath):
+                stat = os.stat(fpath)
+                h.update(f"{fname}:uploaded:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+            else:
+                h.update(f"{fname}:template\n".encode())
+
+    # Extra files
+    for fname in get_extra_files(student_folder, lab_config):
+        fpath = os.path.join(student_folder, fname)
+        stat = os.stat(fpath)
+        h.update(f"{fname}:extra:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+
+    return h.hexdigest()[:16]
+
+
+def save_compile_status(student_folder, lab_config, success):
+    """Save compile result with current file fingerprint."""
+    status = {
+        "success": success,
+        "fingerprint": compute_file_fingerprint(student_folder, lab_config),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    path = os.path.join(student_folder, COMPILE_STATUS_FILE)
+    with open(path, "w") as f:
+        json.dump(status, f)
+
+
+def get_compile_status(student_folder, lab_config):
+    """
+    Return the compile status if it matches the current file state.
+    Returns: "passed", "failed", or "untested"
+    """
+    path = os.path.join(student_folder, COMPILE_STATUS_FILE)
+    if not os.path.isfile(path):
+        return "untested"
+    try:
+        with open(path) as f:
+            status = json.load(f)
+        current_fp = compute_file_fingerprint(student_folder, lab_config)
+        if status.get("fingerprint") != current_fp:
+            return "untested"
+        return "passed" if status.get("success") else "failed"
+    except (json.JSONDecodeError, KeyError):
+        return "untested"
 
 
 def prepare_build_directory(student_folder, lab_config):
@@ -516,6 +589,12 @@ def assignment(assignment_id):
     instructions_raw = lab.get("instructions", "")
     instructions_html = md_lib.markdown(instructions_raw) if instructions_raw else ""
 
+    # Compile state for current file set
+    compile_state = get_compile_status(student_folder, lab)
+
+    # Scoring info
+    scoring = lab.get("scoring") or {}
+
     return render_template(
         "assignment_api.html",
         assignment_id=assignment_id,
@@ -528,6 +607,8 @@ def assignment(assignment_id):
         extra_files=file_status["extra_files"],
         writeup_status=file_status["writeup_files"],
         instructions=instructions_html,
+        compile_state=compile_state,
+        scoring=scoring,
         compile_available=compile_queue.is_available(),
     )
 
@@ -850,11 +931,45 @@ def submit(assignment_id):
             },
         )
 
+        # Step 4: Post score if scoring is configured
+        scoring = lab.get("scoring")
+        score = None
+        if scoring:
+            compile_state = get_compile_status(student_folder, lab)
+            if compile_state == "passed" and "compile_success_score" in scoring:
+                score = scoring["compile_success_score"]
+            elif "submit_score" in scoring:
+                score = scoring["submit_score"]
+
+        if score is not None:
+            try:
+                canvas_api_request(
+                    f"courses/{COURSE_ID}/assignments/{assignment_id}"
+                    f"/submissions/{student_id}",
+                    method="PUT",
+                    data={
+                        "submission": {
+                            "posted_grade": score,
+                        }
+                    },
+                )
+                logging.info(
+                    "Posted score %s for student %s on assignment %s",
+                    score, netid, assignment_id,
+                )
+            except Exception as e:
+                logging.error("Failed to post score for %s: %s", netid, e)
+                # Don't fail the submission just because grading failed
+
         logging.info(
             "Student %s (%s) submitted assignment %s as comment (file_id=%s)",
             netid, student_id, assignment_id, file_id,
         )
-        return jsonify(success=True, message="Submitted successfully to Canvas!")
+
+        msg = "Submitted successfully to Canvas!"
+        if score is not None:
+            msg += f" Score: {score}"
+        return jsonify(success=True, message=msg)
 
     except requests.exceptions.HTTPError as e:
         # Log the Canvas error response for debugging
@@ -914,6 +1029,20 @@ def compile_status(job_id):
     status = compile_queue.get_job_status(job_id)
     if not status:
         return jsonify(error="Not found"), 404
+
+    # When compilation finishes, persist the result for the submit UI
+    if status.get("status") in ("complete", "failed") and "student_id" in session:
+        result = status.get("result", {})
+        compile_success = bool(result.get("success"))
+        # Look up assignment_id from the job metadata
+        job_meta = compile_queue.redis.hgetall(f"job:{job_id}")
+        if job_meta:
+            aid = job_meta.get("assignment_id", "")
+            lab = get_lab_config_by_assignment_id(aid)
+            if lab:
+                sf = get_submission_folder(session["student_id"], aid)
+                save_compile_status(sf, lab, compile_success)
+
     return jsonify(status)
 
 @app.route("/compile-cancel/<job_id>", methods=["POST"])
