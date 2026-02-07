@@ -103,6 +103,42 @@
 
         .submit-section { text-align: center; padding-top: 20px; border-top: 2px solid #e0e0e0; }
 
+        .compile-state-banner {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 14px 20px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        .compile-state-banner.passed {
+            background-color: #e8f5e9;
+            border: 2px solid #4caf50;
+            color: #2e7d32;
+        }
+        .compile-state-banner.failed {
+            background-color: #fce4ec;
+            border: 2px solid #e53935;
+            color: #c62828;
+        }
+        .compile-state-banner.untested {
+            background-color: #f5f5f5;
+            border: 2px solid #bdbdbd;
+            color: #757575;
+        }
+        .compile-state-icon { font-size: 22px; }
+        .score-badge {
+            background: rgba(0,0,0,0.08);
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-left: 6px;
+        }
+
         .message { padding: 12px; border-radius: 4px; margin-bottom: 20px; display: none; }
         .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
@@ -371,8 +407,30 @@
         <!-- Submit                                                       -->
         <!-- ============================================================ -->
         <div class="submit-section">
-            <p style="margin-bottom: 15px; color: #666;">
-                Ready to submit? This will create a zip with your code and writeup and upload it to Canvas.
+            <div id="compile-state-banner" class="compile-state-banner {{ compile_state }}">
+                {% if compile_state == "passed" %}
+                    <span class="compile-state-icon">✓</span>
+                    <span>Compilation passed for current files</span>
+                    {% if scoring and scoring.get('compile_success_score') %}
+                        <span class="score-badge">Score: {{ scoring.compile_success_score }}</span>
+                    {% endif %}
+                {% elif compile_state == "failed" %}
+                    <span class="compile-state-icon">✗</span>
+                    <span>Compilation failed for current files</span>
+                    {% if scoring and scoring.get('submit_score') %}
+                        <span class="score-badge">Score: {{ scoring.submit_score }}</span>
+                    {% endif %}
+                {% else %}
+                    <span class="compile-state-icon">?</span>
+                    <span>Current files have not been compiled</span>
+                    {% if scoring and scoring.get('submit_score') %}
+                        <span class="score-badge">Score: {{ scoring.submit_score }}</span>
+                    {% endif %}
+                {% endif %}
+            </div>
+
+            <p style="margin: 15px 0; color: #666;">
+                This will create a zip with your code and writeup and upload it to Canvas.
             </p>
             <button id="submit-btn" class="btn btn-success">Submit to Canvas</button>
         </div>
@@ -544,8 +602,30 @@
             function showResults(s) {
                 hideAll(); compileResults.style.display = 'block';
                 const r = s.result || {};
-                if (r.success) { document.getElementById('compile-success').style.display = 'block'; document.querySelector('#compile-output pre').textContent = r.stdout || 'Success.'; }
-                else { document.getElementById('compile-error').style.display = 'block'; let o=''; if(r.stderr) o+=r.stderr; if(r.stdout) o+=(o?'\n\n--- stdout ---\n':'')+r.stdout; if(!o) o=r.error||'Unknown error'; document.querySelector('#compile-output pre').textContent = o; }
+                if (r.success) {
+                    document.getElementById('compile-success').style.display = 'block';
+                    document.querySelector('#compile-output pre').textContent = r.stdout || 'Success.';
+                    updateBanner('passed');
+                } else {
+                    document.getElementById('compile-error').style.display = 'block';
+                    let o=''; if(r.stderr) o+=r.stderr; if(r.stdout) o+=(o?'\n\n--- stdout ---\n':'')+r.stdout; if(!o) o=r.error||'Unknown error';
+                    document.querySelector('#compile-output pre').textContent = o;
+                    updateBanner('failed');
+                }
+            }
+
+            function updateBanner(state) {
+                const banner = document.getElementById('compile-state-banner');
+                banner.className = 'compile-state-banner ' + state;
+                const icon = banner.querySelector('.compile-state-icon');
+                const label = banner.querySelectorAll('span')[1];
+                if (state === 'passed') {
+                    icon.textContent = '✓';
+                    label.textContent = 'Compilation passed for current files';
+                } else {
+                    icon.textContent = '✗';
+                    label.textContent = 'Compilation failed for current files';
+                }
             }
 
             function reset() { compileBtn.disabled = false; compileBtn.textContent = '🔨 Test Compilation'; currentJobId = null; }

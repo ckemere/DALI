@@ -1,5 +1,8 @@
 display_name: "Lab 3"
 canvas_assignment_id: "505415"
+scoring:
+  submit_score: 25
+  compile_success_score: 50
 writeup_files:
   - writeup.txt
   - writeup.pdf
