@@ -49,6 +49,8 @@ import logging
 from itertools import cycle
 
 from locust import HttpUser, task, between, events
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -102,7 +104,17 @@ def next_student():
 # ---------------------------------------------------------------------------
 
 def make_c_file(filename, student_netid):
-    """Generate a minimal .c file that's different per student."""
+    """
+    Load the real template file content so compilation actually succeeds.
+    Falls back to a stub if the template isn't available locally.
+    """
+    template_path = os.path.join("template_files", LAB_NAME, filename)
+    if os.path.isfile(template_path):
+        with open(template_path, "rb") as f:
+            return f.read()
+
+    # Fallback stub (will fail compilation but still exercises the queue)
+    logging.warning("Template file not found locally: %s — using stub", template_path)
     return (
         f"// Uploaded by {student_netid} during load test\n"
         f"// File: {filename}\n"
@@ -248,6 +260,9 @@ class StudentUser(HttpUser):
         self.target_port = parsed.port or (443 if parsed.scheme == "https" else 5000)
         self.is_https = parsed.scheme == "https"
 
+        # Accept self-signed certificates
+        self.client.verify = False
+
         # Step 1: Simulate failed TLS handshakes
         if self.is_https and not SKIP_TLS_ABUSE:
             for i in range(TLS_FAILURES):
@@ -276,18 +291,15 @@ class StudentUser(HttpUser):
             data={"netid": self.netid, "password": self.student["password"]},
             catch_response=True,
             name="/login",
-            allow_redirects=False,
         ) as resp:
-            # Successful login returns a 302 redirect to /
-            if resp.status_code in (200, 302):
+            # With allow_redirects=True (default), a successful login
+            # redirects to / and we get a 200 for the home page.
+            # A failed login returns 200 with the login form + flash message.
+            if resp.status_code == 200 and "Invalid" not in resp.text:
                 self.logged_in = True
                 resp.success()
             else:
                 resp.failure(f"Login failed: HTTP {resp.status_code}")
-
-        # Follow the redirect to home
-        if self.logged_in:
-            self.client.get("/", name="/home")
 
     @task
     def full_workflow(self):

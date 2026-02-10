@@ -56,6 +56,11 @@ dali/
 │       ├── state_machine_logic.c
 │       ├── state_machine_logic.h
 │       └── mspm0g3507.cmd       # Auto-copied as build infrastructure
+├── testing/                     # Load testing suite
+│   ├── TESTING.md               # Testing documentation
+│   ├── locustfile.py
+│   ├── generate_test_students.py
+│   └── run_load_test.sh
 └── uploads/                     # Student submissions (auto-created)
     └── student_{canvas_id}/
         └── assignment_{id}/
@@ -124,7 +129,7 @@ ts1000,"Student, Test",106586,X_ODy9#ZCOnP
 jd2000,"Doe, Jane",108842,kR7$mPqW2xNv
 ```
 
-Students log in with their NetID and the password you assign. After changing the roster or lab configs, reload gunicorn: `kill -HUP $(cat gunicorn.pid)` or restart it.
+Students log in with their NetID and the password you assign. After changing the roster or lab configs, restart gunicorn (see below).
 
 ### Run
 
@@ -132,14 +137,69 @@ Students log in with their NetID and the password you assign. After changing the
 # Terminal 1: Redis
 redis-server
 
-# Terminal 2: Web app
-python3 app_complete.py
+# Terminal 2: Web app (see "Running with Gunicorn" below)
+gunicorn app_complete:app \
+    --workers 4 --worker-class gevent --worker-connections 100 \
+    --timeout 120 --bind 0.0.0.0:5000
 
 # Terminal 3: Compile workers
 python3 compile_worker_main.py
 
 # Visit http://localhost:5000
 # Admin dashboard at /admin/compile-queue
+```
+
+---
+
+## Running with Gunicorn
+
+Use gevent async workers for production. The default gunicorn sync workers handle only one request at a time per worker — if any request is slow (a Canvas API call, a stalled TLS handshake, etc.), it blocks that worker and other students' requests queue up.
+
+### HTTP (on a trusted network)
+
+If DALI is only accessible on a local or campus network, plain HTTP is simplest:
+
+```bash
+gunicorn app_complete:app \
+    --workers 4 \
+    --worker-class gevent \
+    --worker-connections 100 \
+    --timeout 120 \
+    --bind 0.0.0.0:5000
+```
+
+### HTTPS with a self-signed certificate
+
+```bash
+# Generate a self-signed cert (if you don't have one)
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
+    -days 365 -nodes -subj '/CN=localhost'
+
+gunicorn app_complete:app \
+    --certfile cert.pem \
+    --keyfile key.pem \
+    --workers 4 \
+    --worker-class gevent \
+    --worker-connections 100 \
+    --timeout 120 \
+    --bind 0.0.0.0:5000
+```
+
+Note: students will need to click through browser warnings to accept the self-signed certificate. Some browsers (especially mobile) may silently fail. If this causes issues, use plain HTTP or get a real certificate.
+
+### Tuning
+
+- **Workers**: `2 * num_cpu_cores + 1` is a good starting point
+- **Worker connections**: 100 per worker is fine for a class of 50–100 students
+- **Timeout**: 120 seconds accommodates slow Canvas API uploads
+- **Log level**: add `--log-level warning` to reduce noise in production
+
+### Development
+
+For local development, the Flask dev server is fine:
+
+```bash
+python3 app_complete.py
 ```
 
 ---
@@ -163,7 +223,7 @@ writeup_files:
   - writeup.pdf
 ```
 
-That's it. On startup (or via `POST /admin/reload-labs`), DALI scans `template_files/*/lab.yaml` and auto-discovers:
+That's it. On startup, DALI scans `template_files/*/lab.yaml` and auto-discovers:
 
 - **Code files**: all `.c` and `.h` files in the directory — shown to students as uploadable/editable
 - **Infrastructure files**: everything else (`.cmd`, etc.) — copied into builds automatically, not shown to students
@@ -208,9 +268,9 @@ At compile time, the same merge happens into a temp directory, a Makefile is gen
 
 ---
 
-## HTTPS
+## HTTPS with Nginx
 
-For production, put nginx in front as a reverse proxy with TLS:
+For a public-facing deployment, put nginx in front as a reverse proxy with a real TLS certificate:
 
 ```nginx
 server {
@@ -227,9 +287,31 @@ server {
 }
 ```
 
+This avoids the self-signed certificate issues entirely and handles TLS termination more efficiently than gunicorn.
+
+---
+
+## Load Testing
+
+A full load testing suite is included in the `testing/` directory. See [testing/TESTING.md](testing/TESTING.md) for details.
+
+Quick start:
+
+```bash
+pip install locust
+python3 testing/generate_test_students.py --output testing/test_students.csv
+SKIP_TLS_ABUSE=1 TEST_ROSTER_CSV=testing/test_students.csv \
+    locust -f testing/locustfile.py --host http://localhost:5000 \
+    --users 50 --spawn-rate 5 --run-time 5m --headless
+```
+
 ---
 
 ## Troubleshooting
+
+**Pages load slowly under load** — You're probably using gunicorn's default sync workers. Switch to gevent workers (see "Running with Gunicorn" above).
+
+**Students can't connect with self-signed cert** — Browsers reject self-signed certificates. Either use plain HTTP on a trusted network, put nginx in front with a real cert, or instruct students to click through the browser warning.
 
 **Jobs stuck in "queued"** — The worker process isn't running. Start `compile_worker_main.py` in a separate terminal.
 
