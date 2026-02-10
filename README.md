@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Logo.png" alt="DALI Logo" width="300">
+</p>
+
 # DALI — Dynamic Assignment Lab Interface
 
 > Surreally simple submissions for embedded systems
@@ -12,7 +16,7 @@ Built for **ELEC 327** at Rice University, targeting the TI MSPM0G3507.
 
 **Students** upload only the files you specify, test compilation before submitting, see their queue position in real time, and submit a clean zip to Canvas with one click. Template files fill in anything they don't upload.
 
-**Instructors** get a live admin dashboard showing the compilation queue, per-assignment lab configs that enforce exactly which files are expected, and submissions that always have the same archive structure.
+**Instructors** get a live admin dashboard showing the compilation queue, per-assignment lab configs that enforce exactly which files are expected, and submissions that always have the same archive structure. Submissions appear directly in SpeedGrader as the student's actual submission.
 
 ---
 
@@ -56,11 +60,6 @@ dali/
 │       ├── state_machine_logic.c
 │       ├── state_machine_logic.h
 │       └── mspm0g3507.cmd       # Auto-copied as build infrastructure
-├── testing/                     # Load testing suite
-│   ├── TESTING.md               # Testing documentation
-│   ├── locustfile.py
-│   ├── generate_test_students.py
-│   └── run_load_test.sh
 └── uploads/                     # Student submissions (auto-created)
     └── student_{canvas_id}/
         └── assignment_{id}/
@@ -76,6 +75,7 @@ dali/
 - Redis
 - TI ARM Clang compiler + MSPM0 SDK
 - Canvas API token with course access
+- The Canvas account behind the API token must have "Become other users" (a.k.a. "Users - act as") permission — this is required for uploading submission files on behalf of students
 
 ### Install
 
@@ -113,6 +113,10 @@ export TI_COMPILER_ROOT="/home/elec327/ti/ccs2041/ccs/tools/compiler/ti-cgt-arml
 export TI_SDK_ROOT="/home/elec327/ti/mspm0_sdk_2_09_00_01"
 export PATH="$TI_COMPILER_ROOT/bin:$PATH"
 
+# Submission mode (optional)
+export SUBMIT_AS_UPLOAD="true"                          # default: true (actual Canvas submission)
+                                                        # set to "false" for legacy comment-attachment mode
+
 # Worker tuning (optional)
 export COMPILE_WORKERS="8"                              # default: 8
 export COMPILE_MAX_RUNTIME="60"                         # seconds, default: 60
@@ -129,7 +133,7 @@ ts1000,"Student, Test",106586,X_ODy9#ZCOnP
 jd2000,"Doe, Jane",108842,kR7$mPqW2xNv
 ```
 
-Students log in with their NetID and the password you assign. After changing the roster or lab configs, restart gunicorn (see below).
+Students log in with their NetID and the password you assign. After changing the roster or lab configs, reload gunicorn: `kill -HUP $(cat gunicorn.pid)` or restart it.
 
 ### Run
 
@@ -137,69 +141,14 @@ Students log in with their NetID and the password you assign. After changing the
 # Terminal 1: Redis
 redis-server
 
-# Terminal 2: Web app (see "Running with Gunicorn" below)
-gunicorn app_complete:app \
-    --workers 4 --worker-class gevent --worker-connections 100 \
-    --timeout 120 --bind 0.0.0.0:5000
+# Terminal 2: Web app
+python3 app_complete.py
 
 # Terminal 3: Compile workers
 python3 compile_worker_main.py
 
 # Visit http://localhost:5000
 # Admin dashboard at /admin/compile-queue
-```
-
----
-
-## Running with Gunicorn
-
-Use gevent async workers for production. The default gunicorn sync workers handle only one request at a time per worker — if any request is slow (a Canvas API call, a stalled TLS handshake, etc.), it blocks that worker and other students' requests queue up.
-
-### HTTP (on a trusted network)
-
-If DALI is only accessible on a local or campus network, plain HTTP is simplest:
-
-```bash
-gunicorn app_complete:app \
-    --workers 4 \
-    --worker-class gevent \
-    --worker-connections 100 \
-    --timeout 120 \
-    --bind 0.0.0.0:5000
-```
-
-### HTTPS with a self-signed certificate
-
-```bash
-# Generate a self-signed cert (if you don't have one)
-openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem \
-    -days 365 -nodes -subj '/CN=localhost'
-
-gunicorn app_complete:app \
-    --certfile cert.pem \
-    --keyfile key.pem \
-    --workers 4 \
-    --worker-class gevent \
-    --worker-connections 100 \
-    --timeout 120 \
-    --bind 0.0.0.0:5000
-```
-
-Note: students will need to click through browser warnings to accept the self-signed certificate. Some browsers (especially mobile) may silently fail. If this causes issues, use plain HTTP or get a real certificate.
-
-### Tuning
-
-- **Workers**: `2 * num_cpu_cores + 1` is a good starting point
-- **Worker connections**: 100 per worker is fine for a class of 50–100 students
-- **Timeout**: 120 seconds accommodates slow Canvas API uploads
-- **Log level**: add `--log-level warning` to reduce noise in production
-
-### Development
-
-For local development, the Flask dev server is fine:
-
-```bash
-python3 app_complete.py
 ```
 
 ---
@@ -223,7 +172,7 @@ writeup_files:
   - writeup.pdf
 ```
 
-That's it. On startup, DALI scans `template_files/*/lab.yaml` and auto-discovers:
+That's it. On startup (or via `POST /admin/reload-labs`), DALI scans `template_files/*/lab.yaml` and auto-discovers:
 
 - **Code files**: all `.c` and `.h` files in the directory — shown to students as uploadable/editable
 - **Infrastructure files**: everything else (`.cmd`, etc.) — copied into builds automatically, not shown to students
@@ -233,6 +182,8 @@ The `canvas_assignment_id` is the numeric ID from the Canvas assignment URL (`/c
 
 Students can also upload additional `.c`/`.h` files not in the template, or exclude template files they don't need.
 
+**Important:** For the default submission mode (`SUBMIT_AS_UPLOAD=true`), each Canvas assignment must have `Online - File Uploads` enabled in its submission type settings. If file uploads are not an allowed submission type, Canvas will reject the submission with a 400 error.
+
 ---
 
 ## How Submission Works
@@ -240,8 +191,13 @@ Students can also upload additional `.c`/`.h` files not in the template, or excl
 When a student clicks "Submit to Canvas":
 
 1. A zip is built from: template files (minus any the student excluded) + student uploads + any extra files the student added + writeup
-2. The zip is uploaded to Canvas as a **submission comment attachment** on the assignment
-3. The comment includes a timestamp
+2. The zip is uploaded to Canvas as the student's **actual submission** using the `online_upload` submission type, via Canvas API masquerading (`as_user_id`)
+3. A submission comment with a timestamp is also attached for audit trail
+4. If scoring is configured, a grade is posted automatically
+
+The submission appears directly in SpeedGrader as the student's submission — instructors can download the zip, view the submission history, and grade it just like any other Canvas file upload submission.
+
+**Legacy mode:** Set `SUBMIT_AS_UPLOAD=false` to instead upload the zip as a submission comment attachment (the original behavior). In this mode the zip does not appear as a formal submission in SpeedGrader — only as a comment attachment.
 
 At compile time, the same merge happens into a temp directory, a Makefile is generated from all `.c` files present, and `make` runs with the TI toolchain flags.
 
@@ -264,13 +220,13 @@ At compile time, the same merge happens into a temp directory, a Makefile is gen
 | `/compile-cancel/<job_id>` | Cancel queued job (POST) |
 | `/submit/<id>` | Submit to Canvas (POST) |
 | `/admin/compile-queue` | Admin dashboard |
-| `/health` | Health check (Redis, queue, roster, labs) |
+| `/health` | Health check (Redis, queue, roster, labs, submit mode) |
 
 ---
 
-## HTTPS with Nginx
+## HTTPS
 
-For a public-facing deployment, put nginx in front as a reverse proxy with a real TLS certificate:
+For production, put nginx in front as a reverse proxy with TLS:
 
 ```nginx
 server {
@@ -287,31 +243,9 @@ server {
 }
 ```
 
-This avoids the self-signed certificate issues entirely and handles TLS termination more efficiently than gunicorn.
-
----
-
-## Load Testing
-
-A full load testing suite is included in the `testing/` directory. See [testing/TESTING.md](testing/TESTING.md) for details.
-
-Quick start:
-
-```bash
-pip install locust
-python3 testing/generate_test_students.py --output testing/test_students.csv
-SKIP_TLS_ABUSE=1 TEST_ROSTER_CSV=testing/test_students.csv \
-    locust -f testing/locustfile.py --host http://localhost:5000 \
-    --users 50 --spawn-rate 5 --run-time 5m --headless
-```
-
 ---
 
 ## Troubleshooting
-
-**Pages load slowly under load** — You're probably using gunicorn's default sync workers. Switch to gevent workers (see "Running with Gunicorn" above).
-
-**Students can't connect with self-signed cert** — Browsers reject self-signed certificates. Either use plain HTTP on a trusted network, put nginx in front with a real cert, or instruct students to click through the browser warning.
 
 **Jobs stuck in "queued"** — The worker process isn't running. Start `compile_worker_main.py` in a separate terminal.
 
@@ -321,7 +255,13 @@ SKIP_TLS_ABUSE=1 TEST_ROSTER_CSV=testing/test_students.csv \
 
 **Redis connection refused** — Start Redis: `sudo systemctl start redis-server`
 
-**Check overall health** — Hit `/health` for Redis status, queue depth, and roster count.
+**403 "user not authorized" on submission** — Your Canvas API token's account needs the "Become other users" permission. This is required for masquerading as students during file upload. Contact your Canvas admin to enable "Users - act as" for your role.
+
+**400 "Invalid submission type" on submission** — The Canvas assignment doesn't have `Online - File Uploads` enabled. Edit the assignment settings in Canvas and add it as an allowed submission type.
+
+**Want to use the old comment-attachment mode?** — Set `SUBMIT_AS_UPLOAD=false` in your environment. The zip will be attached to a submission comment instead of being submitted as a formal submission.
+
+**Check overall health** — Hit `/health` for Redis status, queue depth, roster count, and current submission mode.
 
 ---
 
