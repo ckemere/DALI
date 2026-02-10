@@ -862,7 +862,7 @@ def view_template(lab_name, filename):
 # CANVAS FILE UPLOAD HELPERS
 # =============================================================================
 
-def _canvas_upload_file(preflight_url, filename, zip_buf):
+def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
     """
     Perform the Canvas 3-step file upload (steps 1 & 2 & 3).
 
@@ -870,11 +870,30 @@ def _canvas_upload_file(preflight_url, filename, zip_buf):
     Step 2: POST the file to upload_url
     Step 3: Follow any redirect (3XX) to finalize the file
 
+    When uploading to a student's submission file area using an instructor
+    token, the redirect confirmation URL points to the student's file
+    context.  The instructor token alone gets a 403 on that URL.  Passing
+    as_user_id tells Canvas to masquerade as the student for the
+    confirmation GET (and the preflight POST), which resolves this.
+
+    The calling user (instructor) must have the "Become other users"
+    permission in Canvas (typically granted to all admins/instructors).
+
     Returns the file_id of the newly created Canvas file.
     """
+    # Build masquerade query string if needed
+    masq = f"as_user_id={as_user_id}" if as_user_id else ""
+
     # Step 1: Preflight
+    # Append masquerade to the preflight URL so the file is created in
+    # the student's context.
+    preflight_endpoint = preflight_url
+    if masq:
+        sep = "&" if "?" in preflight_endpoint else "?"
+        preflight_endpoint = f"{preflight_endpoint}{sep}{masq}"
+
     preflight = canvas_api_request(
-        preflight_url,
+        preflight_endpoint,
         method="POST",
         data={
             "name": filename,
@@ -887,6 +906,7 @@ def _canvas_upload_file(preflight_url, filename, zip_buf):
     upload_params = preflight.get("upload_params", {})
 
     # Step 2: Upload the actual file
+    # No auth token here — the upload_url is pre-signed by Canvas.
     zip_buf.seek(0)
     resp = requests.post(
         upload_url,
@@ -900,16 +920,26 @@ def _canvas_upload_file(preflight_url, filename, zip_buf):
     #   - 3XX redirect: follow it with an authenticated GET to finalize
     #   - 201 Created:  file data may be at Location header (GET it)
     #   - 200 OK:       file data is in the response body directly
+    #
+    # For the confirmation GET we must also masquerade, because the
+    # redirect URL (e.g. /api/v1/files/NNN) is in the student's file
+    # context and the instructor token alone is not authorized.
+    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+
     if resp.status_code in (301, 302, 303, 307, 308):
         location = resp.headers["Location"]
-        headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+        if masq:
+            sep = "&" if "?" in location else "?"
+            location = f"{location}{sep}{masq}"
         confirm = requests.get(location, headers=headers, timeout=30)
         confirm.raise_for_status()
         file_data = confirm.json()
     elif resp.status_code == 201:
         location = resp.headers.get("Location")
         if location:
-            headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+            if masq:
+                sep = "&" if "?" in location else "?"
+                location = f"{location}{sep}{masq}"
             confirm = requests.get(location, headers=headers, timeout=30)
             confirm.raise_for_status()
             file_data = confirm.json()
@@ -923,12 +953,16 @@ def _canvas_upload_file(preflight_url, filename, zip_buf):
 
 
 def _upload_submission_file(assignment_id, student_id, filename, zip_buf):
-    """Upload a file for use as an actual submission (online_upload)."""
+    """Upload a file for use as an actual submission (online_upload).
+
+    Uses masquerading (as_user_id) so the file is created in the student's
+    context and the instructor token can access the confirmation URL.
+    """
     preflight_url = (
         f"courses/{COURSE_ID}/assignments/{assignment_id}"
         f"/submissions/{student_id}/files"
     )
-    return _canvas_upload_file(preflight_url, filename, zip_buf)
+    return _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=student_id)
 
 
 def _upload_comment_file(assignment_id, student_id, filename, zip_buf):
@@ -937,6 +971,8 @@ def _upload_comment_file(assignment_id, student_id, filename, zip_buf):
         f"courses/{COURSE_ID}/assignments/{assignment_id}"
         f"/submissions/{student_id}/comments/files"
     )
+    # Comment file uploads are done as the instructor — no masquerade needed
+    # (this was the original working behavior).
     return _canvas_upload_file(preflight_url, filename, zip_buf)
 
 
