@@ -164,7 +164,7 @@ def load_lab_configs(template_folder):
             logging.error("lab.yaml in %s missing canvas_assignment_id — skipping", dirname)
             continue
 
-        writeup_files = meta.get("writeup_files", ["writeup.txt", "writeup.pdf"])
+        writeup_files = meta.get("writeup_files", [])
         lab_type = meta.get("type", "embedded_c")
 
         if lab_type == "kicad_pcb":
@@ -1161,13 +1161,15 @@ def submit(assignment_id):
 
     student_folder = get_submission_folder(session["student_id"], assignment_id)
 
-    # Require at least one writeup file
-    has_writeup = any(
-        os.path.isfile(os.path.join(student_folder, wf))
-        for wf in lab.get("writeup_files", [])
-    )
-    if not has_writeup:
-        return jsonify(error="Please upload a writeup file before submitting."), 400
+    # Require at least one writeup file (only if the lab expects writeups)
+    writeup_files = lab.get("writeup_files", [])
+    if writeup_files:
+        has_writeup = any(
+            os.path.isfile(os.path.join(student_folder, wf))
+            for wf in writeup_files
+        )
+        if not has_writeup:
+            return jsonify(error="Please upload a writeup file before submitting."), 400
 
     # For PCB labs, require a .kicad_pcb file
     lab_type = lab.get("type", "embedded_c")

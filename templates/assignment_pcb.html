@@ -328,6 +328,7 @@
         <!-- ============================================================ -->
         <!-- Writeup                                                      -->
         <!-- ============================================================ -->
+        {% if writeup_files %}
         <div class="section">
             <h2 class="section-title">Writeup (Choose TXT or PDF)</h2>
 
@@ -369,6 +370,7 @@
             </div>
             {% endif %}
         </div>
+        {% endif %}
 
         <!-- ============================================================ -->
         <!-- DRC Check                                                    -->
@@ -469,8 +471,8 @@
         <!-- ============================================================ -->
         <div class="submit-section">
             <p style="margin: 15px 0; color: #666;">
-                This will create a zip with your KiCad files, DRC reports, board previews,
-                and writeup — then upload it to Canvas.
+                This will create a zip with your KiCad files, DRC reports, and board previews{% if writeup_files %},
+                and writeup{% endif %} — then upload it to Canvas.
             </p>
             <button id="submit-btn" class="btn btn-success"
                     {% if not pcb_uploaded %}disabled title="Upload a .kicad_pcb file first"{% endif %}>

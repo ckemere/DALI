@@ -312,8 +312,9 @@
         </div>
 
         <!-- ============================================================ -->
-        <!-- Writeup                                                      -->
+        <!-- Writeup (only shown if writeup_files is configured)          -->
         <!-- ============================================================ -->
+        {% if writeup_files %}
         <div class="section">
             <h2 class="section-title">Writeup (Choose TXT or PDF)</h2>
 
@@ -361,6 +362,7 @@
             </div>
             {% endif %}
         </div>
+        {% endif %}
 
         <!-- ============================================================ -->
         <!-- Compilation                                                  -->
@@ -430,7 +432,7 @@
             </div>
 
             <p style="margin: 15px 0; color: #666;">
-                This will create a zip with your code and writeup and upload it to Canvas.
+                This will create a zip with your code{% if writeup_files %} and writeup{% endif %} and upload it to Canvas.
             </p>
             <button id="submit-btn" class="btn btn-success">Submit to Canvas</button>
         </div>
