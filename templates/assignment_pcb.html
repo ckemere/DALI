@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ assignment_title }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+
+        header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-left h1 { color: #333; font-size: 24px; margin-bottom: 10px; }
+        .user-info { color: #666; font-size: 14px; }
+        .back-link { color: #667eea; text-decoration: none; font-size: 14px; }
+        .back-link:hover { text-decoration: underline; }
+
+        .section { margin-bottom: 30px; }
+        .section-title { font-size: 18px; color: #333; margin-bottom: 15px; font-weight: 600; }
+        .section-subtitle { font-size: 13px; color: #888; margin-bottom: 12px; }
+
+        /* File items */
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background-color: #fafafa;
+            transition: all 0.2s;
+        }
+        .file-item:hover { background-color: #f0f0f0; }
+        .file-item.uploaded { background-color: #e8f5e9; border-color: #4caf50; }
+
+        .file-status {
+            width: 40px; height: 40px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            margin-right: 15px; font-size: 20px;
+            flex-shrink: 0;
+        }
+        .file-status.default { background-color: #e0e0e0; color: #999; }
+        .file-status.uploaded { background-color: #4caf50; color: white; }
+
+        .file-info { flex-grow: 1; }
+        .file-name { font-weight: 600; color: #333; margin-bottom: 4px; }
+        .file-details { font-size: 12px; color: #666; }
+
+        .file-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* Buttons */
+        button, .btn {
+            padding: 8px 16px; border: none; border-radius: 4px;
+            cursor: pointer; font-size: 13px; transition: all 0.2s;
+            text-decoration: none; display: inline-block;
+        }
+        .btn-primary { background-color: #2196F3; color: white; }
+        .btn-primary:hover { background-color: #1976D2; }
+        .btn-secondary { background-color: #f5f5f5; color: #333; border: 1px solid #ddd; }
+        .btn-secondary:hover { background-color: #e0e0e0; }
+        .btn-compile { background-color: #7c4dff; color: white; font-size: 15px; padding: 10px 24px; }
+        .btn-compile:hover { background-color: #651fff; }
+        .btn-compile:disabled { background-color: #ccc; cursor: not-allowed; }
+        .btn-success { background-color: #4caf50; color: white; font-size: 16px; padding: 12px 30px; }
+        .btn-success:hover { background-color: #45a049; }
+        .btn-success:disabled { background-color: #ccc; cursor: not-allowed; }
+        .btn-warning { background-color: #ff9800; color: white; }
+        .btn-warning:hover { background-color: #f57c00; }
+
+        .file-input { display: none; }
+        .upload-label { cursor: pointer; }
+
+        /* Messages */
+        .message { padding: 12px; border-radius: 4px; margin-bottom: 20px; display: none; }
+        .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        /* Compile boxes */
+        .compile-box { padding: 12px; border-radius: 4px; margin-top: 15px; margin-bottom: 10px; }
+        .compile-box.queue { background: #e3f2fd; }
+        .compile-box.compiling { background: #fff3cd; }
+        .compile-box .title { font-weight: 600; margin-bottom: 4px; }
+        .compile-box .detail { font-size: 12px; color: #666; }
+        .compile-output pre {
+            background: #1e1e1e; color: #d4d4d4;
+            padding: 15px; border-radius: 4px;
+            overflow-x: auto; max-height: 300px;
+            font-size: 13px; line-height: 1.5;
+            margin-top: 10px; white-space: pre-wrap; word-wrap: break-word;
+        }
+        .compile-unavailable { color: #999; font-style: italic; font-size: 13px; }
+
+        /* PCB Results */
+        .pcb-results {
+            margin-top: 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .pcb-results-header {
+            background: #f5f5f5;
+            padding: 12px 20px;
+            font-weight: 600;
+            font-size: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .drc-summary {
+            display: flex;
+            gap: 15px;
+            padding: 15px 20px;
+            flex-wrap: wrap;
+        }
+
+        .drc-card {
+            flex: 1;
+            min-width: 200px;
+            padding: 14px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+        .drc-card.passed { background-color: #e8f5e9; border-color: #4caf50; }
+        .drc-card.failed { background-color: #fce4ec; border-color: #e53935; }
+        .drc-card.pending { background-color: #f5f5f5; border-color: #ccc; }
+
+        .drc-card-label {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+        .drc-card-status {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .drc-card.passed .drc-card-status { color: #2e7d32; }
+        .drc-card.failed .drc-card-status { color: #c62828; }
+        .drc-card.pending .drc-card-status { color: #999; }
+
+        .drc-card-link {
+            display: inline-block;
+            margin-top: 6px;
+            font-size: 12px;
+            color: #667eea;
+            text-decoration: none;
+        }
+        .drc-card-link:hover { text-decoration: underline; }
+
+        .preview-section {
+            padding: 15px 20px;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .preview-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .preview-card {
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .preview-card-header {
+            background: #f5f5f5;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #555;
+        }
+        .preview-card img {
+            width: 100%;
+            display: block;
+            background: white;
+        }
+
+        .no-results {
+            padding: 30px;
+            text-align: center;
+            color: #999;
+            font-size: 14px;
+        }
+
+        /* Submit */
+        .submit-section { text-align: center; padding-top: 20px; border-top: 2px solid #e0e0e0; }
+
+        /* Instructions */
+        .instructions {
+            background-color: #f0f7ff;
+            border: 1px solid #c2daf0;
+            border-radius: 6px;
+            padding: 16px 20px;
+            margin-bottom: 30px;
+            font-size: 14px;
+            color: #333;
+            line-height: 1.6;
+        }
+        .instructions p { margin-bottom: 8px; }
+        .instructions p:last-child { margin-bottom: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <h1>{{ assignment_title }}</h1>
+                <div class="user-info">Student: {{ student_name }}</div>
+            </div>
+            <a href="/" class="back-link">← Back to Assignments</a>
+        </header>
+
+        <div id="message" class="message"></div>
+
+        <!-- Instructions -->
+        {% if instructions %}
+        <div class="instructions">{{ instructions|safe }}</div>
+        {% endif %}
+
+        <!-- ============================================================ -->
+        <!-- KiCad Project Files                                          -->
+        <!-- ============================================================ -->
+        <div class="section">
+            <h2 class="section-title">KiCad Project Files</h2>
+            <p class="section-subtitle">
+                Upload your KiCad PCB file (.kicad_pcb). You can also upload your
+                schematic (.kicad_sch) and project file (.kicad_pro).
+            </p>
+
+            <!-- PCB file (required) -->
+            <div class="file-item {% if pcb_uploaded %}uploaded{% endif %}" id="pcb-file-item">
+                <div class="file-status {% if pcb_uploaded %}uploaded{% else %}default{% endif %}">
+                    {% if pcb_uploaded %}✓{% else %}📋{% endif %}
+                </div>
+                <div class="file-info">
+                    <div class="file-name">
+                        {% if pcb_filename %}{{ pcb_filename }}{% else %}PCB File (.kicad_pcb){% endif %}
+                    </div>
+                    <div class="file-details">
+                        {% if pcb_uploaded %}
+                            Uploaded • {{ pcb_size }} bytes • {{ pcb_modified }}
+                        {% else %}
+                            <strong>Required</strong> — Upload your board design
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="file-actions">
+                    <label for="upload-pcb" class="btn btn-primary upload-label">
+                        {% if pcb_uploaded %}Replace{% else %}Upload{% endif %}
+                    </label>
+                    <input type="file" id="upload-pcb" class="file-input" accept=".kicad_pcb">
+                </div>
+            </div>
+
+            <!-- Schematic file (optional) -->
+            <div class="file-item {% if sch_uploaded %}uploaded{% endif %}">
+                <div class="file-status {% if sch_uploaded %}uploaded{% else %}default{% endif %}">
+                    {% if sch_uploaded %}✓{% else %}📄{% endif %}
+                </div>
+                <div class="file-info">
+                    <div class="file-name">
+                        {% if sch_filename %}{{ sch_filename }}{% else %}Schematic (.kicad_sch){% endif %}
+                    </div>
+                    <div class="file-details">
+                        {% if sch_uploaded %}
+                            Uploaded • {{ sch_size }} bytes • {{ sch_modified }}
+                        {% else %}
+                            Optional — Upload your schematic
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="file-actions">
+                    <label for="upload-sch" class="btn btn-primary upload-label">
+                        {% if sch_uploaded %}Replace{% else %}Upload{% endif %}
+                    </label>
+                    <input type="file" id="upload-sch" class="file-input" accept=".kicad_sch">
+                </div>
+            </div>
+
+            <!-- Project file (optional) -->
+            <div class="file-item {% if pro_uploaded %}uploaded{% endif %}">
+                <div class="file-status {% if pro_uploaded %}uploaded{% else %}default{% endif %}">
+                    {% if pro_uploaded %}✓{% else %}📄{% endif %}
+                </div>
+                <div class="file-info">
+                    <div class="file-name">
+                        {% if pro_filename %}{{ pro_filename }}{% else %}Project File (.kicad_pro){% endif %}
+                    </div>
+                    <div class="file-details">
+                        {% if pro_uploaded %}
+                            Uploaded • {{ pro_size }} bytes • {{ pro_modified }}
+                        {% else %}
+                            Optional — Upload your project file
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="file-actions">
+                    <label for="upload-pro" class="btn btn-primary upload-label">
+                        {% if pro_uploaded %}Replace{% else %}Upload{% endif %}
+                    </label>
+                    <input type="file" id="upload-pro" class="file-input" accept=".kicad_pro">
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Writeup                                                      -->
+        <!-- ============================================================ -->
+        <div class="section">
+            <h2 class="section-title">Writeup (Choose TXT or PDF)</h2>
+
+            {% set writeup_uploaded = namespace(value=False) %}
+            {% for filename, info in writeup_status.items() %}
+                {% if info.uploaded %}
+                {% set writeup_uploaded.value = True %}
+                <div class="file-item uploaded">
+                    <div class="file-status uploaded">✓</div>
+                    <div class="file-info">
+                        <div class="file-name">{{ filename }}</div>
+                        <div class="file-details">Uploaded • {{ info.size }} bytes • {{ info.modified }}</div>
+                    </div>
+                    <div class="file-actions">
+                        <label for="file-{{ filename }}" class="btn btn-primary upload-label">Replace</label>
+                        <input type="file" id="file-{{ filename }}" class="file-input"
+                               accept=".txt,.pdf" data-filename="{{ filename }}">
+                    </div>
+                </div>
+                {% endif %}
+            {% endfor %}
+
+            {% if not writeup_uploaded.value %}
+            <div class="file-item">
+                <div class="file-status default">📝</div>
+                <div class="file-info">
+                    <div class="file-name">No writeup uploaded yet</div>
+                    <div class="file-details">Upload either a .txt or .pdf file</div>
+                </div>
+                <div class="file-actions">
+                    {% for filename in writeup_files %}
+                    <label for="file-{{ filename }}" class="btn btn-primary upload-label">
+                        Upload {{ filename.split('.')[-1].upper() }}
+                    </label>
+                    <input type="file" id="file-{{ filename }}" class="file-input"
+                           accept=".{{ filename.split('.')[-1] }}" data-filename="{{ filename }}">
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- DRC Check                                                    -->
+        <!-- ============================================================ -->
+        <div class="section">
+            <h2 class="section-title">Design Rule Check</h2>
+            <p style="margin-bottom: 15px; color: #666;">
+                Run DRC against your PCB design and generate board previews.
+                {% if dru_files|length > 1 %}
+                Your design will be checked against {{ dru_files|length }} rule sets.
+                {% endif %}
+            </p>
+
+            {% if compile_available %}
+            <div id="compile-section">
+                <button id="compile-btn" class="btn btn-compile"
+                        {% if not pcb_uploaded %}disabled title="Upload a .kicad_pcb file first"{% endif %}>
+                    🔍 Run DRC Check
+                </button>
+
+                <div id="compile-status" style="display: none;">
+                    <div id="queue-info" class="compile-box queue" style="display: none;">
+                        <div class="title">⏳ In Queue</div>
+                        <div id="queue-position"></div>
+                        <div id="queue-eta" class="detail"></div>
+                        <button id="cancel-compile-btn" class="btn btn-warning" style="margin-top: 8px;">Cancel</button>
+                    </div>
+                    <div id="compiling-info" class="compile-box compiling" style="display: none;">
+                        <div class="title">⚙️ Running DRC…</div>
+                        <div class="detail">This usually takes 10–30 seconds</div>
+                    </div>
+                    <div id="compile-output" class="compile-output" style="display: none;"><pre></pre></div>
+                </div>
+            </div>
+            {% else %}
+            <p class="compile-unavailable">⚠ DRC service is currently unavailable.</p>
+            {% endif %}
+
+            <!-- PCB Results (DRC reports + previews) -->
+            {% if pcb_results and pcb_results.ran %}
+            <div class="pcb-results" id="pcb-results">
+                <div class="pcb-results-header">📊 DRC Results &amp; Board Preview</div>
+
+                <!-- DRC Report Cards -->
+                <div class="drc-summary">
+                    {% for report in pcb_results.drc_reports %}
+                    <div class="drc-card {% if report.html_available %}{% if report.passed %}passed{% else %}failed{% endif %}{% else %}pending{% endif %}">
+                        <div class="drc-card-label">{{ report.label }}</div>
+                        {% if report.html_available %}
+                            <div class="drc-card-status">
+                                {% if report.passed %}
+                                    ✓ Passed
+                                {% else %}
+                                    ✗ {{ report.error_count }} error{{ 's' if report.error_count != 1 }}
+                                {% endif %}
+                            </div>
+                            <a href="/pcb-results/{{ assignment_id }}/drc/{{ report.slug }}.html"
+                               target="_blank" class="drc-card-link">View Full Report →</a>
+                        {% else %}
+                            <div class="drc-card-status">Not yet run</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Board Previews -->
+                {% if pcb_results.preview_top or pcb_results.preview_bottom %}
+                <div class="preview-section">
+                    <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">Board Previews</div>
+                    <div class="preview-grid">
+                        {% if pcb_results.preview_top %}
+                        <div class="preview-card">
+                            <div class="preview-card-header">Top (F.Cu + F.SilkS)</div>
+                            <img src="/pcb-results/{{ assignment_id }}/preview/top.png" alt="Top copper view">
+                        </div>
+                        {% endif %}
+                        {% if pcb_results.preview_bottom %}
+                        <div class="preview-card">
+                            <div class="preview-card-header">Bottom (B.Cu + B.SilkS)</div>
+                            <img src="/pcb-results/{{ assignment_id }}/preview/bottom.png" alt="Bottom copper view">
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% elif pcb_uploaded %}
+            <div class="pcb-results" id="pcb-results">
+                <div class="no-results">
+                    Upload your PCB file and click "Run DRC Check" to see results here.
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Submit                                                       -->
+        <!-- ============================================================ -->
+        <div class="submit-section">
+            <p style="margin: 15px 0; color: #666;">
+                This will create a zip with your KiCad files, DRC reports, board previews,
+                and writeup — then upload it to Canvas.
+            </p>
+            <button id="submit-btn" class="btn btn-success"
+                    {% if not pcb_uploaded %}disabled title="Upload a .kicad_pcb file first"{% endif %}>
+                Submit to Canvas
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const assignmentId = '{{ assignment_id }}';
+
+        // ================================================================
+        // KiCad file uploads
+        // ================================================================
+        async function uploadKicadFile(inputEl, expectedExt) {
+            const file = inputEl.files[0];
+            if (!file) return;
+
+            // Use the file's own name as the upload name
+            const filename = file.name;
+            const ext = filename.split('.').pop().toLowerCase();
+
+            if (ext !== expectedExt) {
+                showMessage(`Expected a .${expectedExt} file`, 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+            showMessage('Uploading…', 'success');
+
+            try {
+                const resp = await fetch(`/upload/${assignmentId}/${filename}`, {
+                    method: 'POST', body: formData
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    showMessage('File uploaded!', 'success');
+                    setTimeout(() => location.reload(), 800);
+                } else {
+                    showMessage(result.error || 'Upload failed', 'error');
+                }
+            } catch (err) {
+                showMessage('Upload failed: ' + err.message, 'error');
+            }
+        }
+
+        document.getElementById('upload-pcb').addEventListener('change', function() {
+            uploadKicadFile(this, 'kicad_pcb');
+        });
+        document.getElementById('upload-sch').addEventListener('change', function() {
+            uploadKicadFile(this, 'kicad_sch');
+        });
+        document.getElementById('upload-pro').addEventListener('change', function() {
+            uploadKicadFile(this, 'kicad_pro');
+        });
+
+        // ================================================================
+        // Writeup uploads (same as embedded_c template)
+        // ================================================================
+        document.querySelectorAll('.file-input[data-filename]').forEach(input => {
+            input.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const filename = e.target.dataset.filename;
+                const formData = new FormData();
+                formData.append('file', file);
+                showMessage('Uploading…', 'success');
+                try {
+                    const resp = await fetch(`/upload/${assignmentId}/${filename}`, {
+                        method: 'POST', body: formData
+                    });
+                    const result = await resp.json();
+                    if (result.success) {
+                        showMessage('File uploaded!', 'success');
+                        setTimeout(() => location.reload(), 800);
+                    } else {
+                        showMessage(result.error || 'Upload failed', 'error');
+                    }
+                } catch (err) {
+                    showMessage('Upload failed: ' + err.message, 'error');
+                }
+            });
+        });
+
+        // ================================================================
+        // DRC Check (same polling pattern as compilation)
+        // ================================================================
+        (function() {
+            const compileBtn = document.getElementById('compile-btn');
+            if (!compileBtn) return;
+            const compileStatus = document.getElementById('compile-status');
+            const queueInfo = document.getElementById('queue-info');
+            const compilingInfo = document.getElementById('compiling-info');
+            const compileOutput = document.getElementById('compile-output');
+            const cancelBtn = document.getElementById('cancel-compile-btn');
+            let currentJobId = null, pollInterval = null;
+
+            compileBtn.addEventListener('click', async () => {
+                compileBtn.disabled = true;
+                compileBtn.textContent = 'Starting…';
+                compileStatus.style.display = 'block';
+                hideAll();
+
+                try {
+                    const resp = await fetch(`/compile/${assignmentId}`, { method: 'POST' });
+                    const data = await resp.json();
+                    if (data.success) {
+                        currentJobId = data.job_id;
+                        startPoll();
+                    } else {
+                        showMessage(data.error || 'Failed', 'error');
+                        reset();
+                    }
+                } catch (err) {
+                    showMessage('Error: ' + err.message, 'error');
+                    reset();
+                }
+            });
+
+            cancelBtn.addEventListener('click', async () => {
+                if (!currentJobId || !confirm('Cancel DRC check?')) return;
+                try {
+                    const resp = await fetch(`/compile-cancel/${currentJobId}`, { method: 'POST' });
+                    const data = await resp.json();
+                    if (data.success) { showMessage('Cancelled.', 'success'); stopPoll(); reset(); }
+                    else { showMessage(data.error, 'error'); }
+                } catch (err) { showMessage('Error: ' + err.message, 'error'); }
+            });
+
+            function startPoll() { pollInterval = setInterval(check, 1500); check(); }
+            function stopPoll() { if (pollInterval) { clearInterval(pollInterval); pollInterval = null; } }
+
+            async function check() {
+                if (!currentJobId) return;
+                try {
+                    const s = await (await fetch(`/compile-status/${currentJobId}`)).json();
+                    if (s.status === 'queued') {
+                        hideAll(); queueInfo.style.display = 'block';
+                        document.getElementById('queue-position').textContent = `Position: #${s.position||0}`;
+                        document.getElementById('queue-eta').textContent =
+                            (s.estimated_wait > 0) ? `~${Math.ceil(s.estimated_wait)}s` : 'Starting soon…';
+                    } else if (s.status === 'compiling') {
+                        hideAll(); compilingInfo.style.display = 'block';
+                    } else if (s.status === 'complete' || s.status === 'failed') {
+                        stopPoll();
+                        // Show build output briefly, then reload to show results
+                        const r = s.result || {};
+                        if (r.stdout || r.stderr) {
+                            hideAll();
+                            compileOutput.style.display = 'block';
+                            let text = '';
+                            if (r.stdout) text += r.stdout;
+                            if (r.stderr) text += (text ? '\n' : '') + r.stderr;
+                            compileOutput.querySelector('pre').textContent = text;
+                        }
+                        // Reload after a short delay so the user sees the previews + reports
+                        setTimeout(() => location.reload(), 1500);
+                    } else if (s.status === 'cancelled') {
+                        stopPoll(); showMessage('Cancelled.', 'success'); reset();
+                    }
+                } catch (err) { console.error(err); }
+            }
+
+            function hideAll() {
+                queueInfo.style.display = 'none';
+                compilingInfo.style.display = 'none';
+                compileOutput.style.display = 'none';
+            }
+
+            function reset() {
+                compileBtn.disabled = false;
+                compileBtn.textContent = '🔍 Run DRC Check';
+                currentJobId = null;
+            }
+        })();
+
+        // ================================================================
+        // Submit
+        // ================================================================
+        document.getElementById('submit-btn').addEventListener('click', async () => {
+            if (!confirm('Submit to Canvas?')) return;
+            const btn = document.getElementById('submit-btn');
+            btn.disabled = true; btn.textContent = 'Submitting…';
+            try {
+                const resp = await fetch(`/submit/${assignmentId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                const result = await resp.json();
+                if (result.success) {
+                    showMessage(result.message, 'success');
+                    btn.textContent = 'Submitted ✓';
+                } else {
+                    showMessage(result.error || 'Submission failed', 'error');
+                    btn.disabled = false; btn.textContent = 'Submit to Canvas';
+                }
+            } catch (err) {
+                showMessage('Submission failed: ' + err.message, 'error');
+                btn.disabled = false; btn.textContent = 'Submit to Canvas';
+            }
+        });
+
+        // ================================================================
+        function showMessage(text, type) {
+            const el = document.getElementById('message');
+            el.textContent = text;
+            el.className = 'message ' + type;
+            el.style.display = 'block';
+            if (type === 'success' && !text.includes('…'))
+                setTimeout(() => { el.style.display = 'none'; }, 5000);
+        }
+    </script>
+</body>
+</html>

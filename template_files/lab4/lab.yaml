@@ -1,0 +1,14 @@
+display_name: "Lab 4: PCB Design 1"
+canvas_assignment_id: "506143"
+type: kicad_pcb
+
+# DRU files must live in this template directory alongside this yaml
+dru_files:
+  - name: weak.kicad_dru
+    label: "Minimum Manufacturing Specs"
+  - name: strong.kicad_dru
+    label: "Refined Design Specs"
+
+writeup_files:
+  - writeup.txt
+  - writeup.pdf
