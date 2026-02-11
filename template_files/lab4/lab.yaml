@@ -9,6 +9,3 @@ dru_files:
   - name: strong.kicad_dru
     label: "Refined Design Specs"
 
-writeup_files:
-  - writeup.txt
-  - writeup.pdf
