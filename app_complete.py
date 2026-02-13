@@ -264,6 +264,33 @@ def get_allowed_extensions(lab_config):
         return ALLOWED_CODE_EXTENSIONS | ALLOWED_DOC_EXTENSIONS
 
 
+# Extensions where only one file of each type should exist at a time.
+# When a student uploads e.g. a new .kicad_pcb, any existing .kicad_pcb is removed.
+PCB_SINGLETON_EXTENSIONS = {"kicad_pcb", "kicad_sch", "kicad_pro"}
+
+
+def _remove_existing_pcb_file(student_folder, ext):
+    """
+    Remove any existing file with the given extension from the student folder.
+
+    KiCad expects exactly one .kicad_pcb (and matching .kicad_sch / .kicad_pro)
+    per project directory.  If a student re-uploads with a different filename,
+    the old file must be cleaned up so there's never more than one of each type.
+    """
+    if ext not in PCB_SINGLETON_EXTENSIONS:
+        return
+    if not os.path.isdir(student_folder):
+        return
+    for fname in os.listdir(student_folder):
+        if fname.startswith("_"):
+            continue
+        fext = fname.rsplit(".", 1)[1].lower() if "." in fname else ""
+        if fext == ext:
+            old_path = os.path.join(student_folder, fname)
+            os.remove(old_path)
+            logging.info("Removed previous .%s file: %s", ext, fname)
+
+
 def build_uploaded_files_status(student_folder, lab_config):
     """
     Build the status dict the assignment template expects.
@@ -895,6 +922,13 @@ def upload_file(assignment_id, filename):
         return jsonify(error="Invalid filename"), 400
 
     student_folder = get_submission_folder(session["student_id"], assignment_id)
+
+    # For PCB labs, ensure only one file per KiCad type exists at a time.
+    # If the student uploads a new .kicad_pcb with a different name than the
+    # previous one, remove the old one first.
+    if lab.get("type") == "kicad_pcb":
+        _remove_existing_pcb_file(student_folder, ext)
+
     dest = os.path.join(student_folder, filename)
     file.save(dest)
 
@@ -943,6 +977,11 @@ def upload_extra_file(assignment_id):
             return jsonify(error=f"Only .c and .h files allowed, got .{ext}"), 400
 
     student_folder = get_submission_folder(session["student_id"], assignment_id)
+
+    # For PCB labs, ensure only one file per KiCad type
+    if lab_type == "kicad_pcb":
+        _remove_existing_pcb_file(student_folder, ext)
+
     dest = os.path.join(student_folder, filename)
     file.save(dest)
 
