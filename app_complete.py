@@ -556,12 +556,18 @@ def _prepare_embedded_c_build_directory(student_folder, lab_config):
     for fname in get_extra_files(student_folder, lab_config):
         shutil.copy2(os.path.join(student_folder, fname), os.path.join(build_dir, fname))
 
-    # Copy linker script and other non-.c/.h files from template
+    # Copy linker script, lab.yaml, and other non-code files from template.
+    # Explicitly skip code files that the student excluded — without this
+    # check, excluded .c/.h files would get copied back into the build
+    # directory because they don't yet exist there.
     template_full_dir = os.path.join(TEMPLATE_FOLDER, template_dir)
     for fname in os.listdir(template_full_dir):
         dest = os.path.join(build_dir, fname)
-        if not os.path.exists(dest):
-            shutil.copy2(os.path.join(template_full_dir, fname), dest)
+        if os.path.exists(dest):
+            continue
+        if fname in excluded:
+            continue
+        shutil.copy2(os.path.join(template_full_dir, fname), dest)
 
     return build_dir
 
