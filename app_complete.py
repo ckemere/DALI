@@ -18,6 +18,8 @@ import hashlib
 import yaml
 import markdown as md_lib
 
+from urllib.parse import urlparse
+
 from compile_queue import CompilationQueue
 from pcb_makefile_generator import create_makefile_for_pcb  # NEW: PCB support
 
@@ -1234,20 +1236,31 @@ def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
     if resp.status_code == 201:
         location = resp.headers.get("Location")
         if location:
-            # Extract file ID from Location header
+            # Parse the URL and extract file ID from path
             # Example: https://canvas.rice.edu/api/v1/files/7332962?include%5B%5D=...
-            match = re.search(r'/files/(\d+)', location)
-            if match:
-                file_id = int(match.group(1))
-                logging.info("Extracted file ID from Step 2 Location header: %s", file_id)
-                return file_id
-            else:
-                logging.error("Could not extract file ID from Location: %s", location)
+            # Path is: /api/v1/files/7332962
+            parsed = urlparse(location)
+            path_parts = parsed.path.split('/')
+            
+            # Find 'files' in the path and get the next part (the file ID)
+            try:
+                files_index = path_parts.index('files')
+                if files_index + 1 < len(path_parts):
+                    file_id_str = path_parts[files_index + 1]
+                    # Remove any non-numeric suffix (like '.json' or parameters)
+                    file_id_str = file_id_str.split('.')[0].split('?')[0]
+                    file_id = int(file_id_str)
+                    logging.info("Extracted file ID from Step 2 Location header: %s", file_id)
+                    return file_id
+            except (ValueError, IndexError) as e:
+                logging.error("Could not parse file ID from Location path: %s (error: %s)", 
+                            parsed.path, e)
         
         # Fallback: Try to get from response body
         try:
             file_data = resp.json()
             if "id" in file_data:
+                logging.info("Got file ID from response body: %s", file_data["id"])
                 return file_data["id"]
         except:
             pass
@@ -1256,11 +1269,17 @@ def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
         # 3XX redirect - file ID is in Location header
         location = resp.headers.get("Location")
         if location:
-            match = re.search(r'/files/(\d+)', location)
-            if match:
-                file_id = int(match.group(1))
-                logging.info("Extracted file ID from Step 2 redirect: %s", file_id)
-                return file_id
+            parsed = urlparse(location)
+            path_parts = parsed.path.split('/')
+            try:
+                files_index = path_parts.index('files')
+                if files_index + 1 < len(path_parts):
+                    file_id_str = path_parts[files_index + 1].split('.')[0].split('?')[0]
+                    file_id = int(file_id_str)
+                    logging.info("Extracted file ID from Step 2 redirect: %s", file_id)
+                    return file_id
+            except (ValueError, IndexError):
+                pass
     
     elif resp.status_code == 200:
         # Direct success - file ID might be in response body
