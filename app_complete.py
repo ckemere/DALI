@@ -1194,25 +1194,22 @@ def pcb_drc_report(assignment_id, slug):
 # Set to True to submit as an actual Canvas submission (online_upload).
 # Set to False to use the old behavior (comment attachment only).
 SUBMIT_AS_UPLOAD = os.environ.get("SUBMIT_AS_UPLOAD", "true").lower() in ("true", "1", "yes")
+
 def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
     """
-    Perform the Canvas 3-step file upload (steps 1 & 2 & 3).
+    Perform the Canvas 3-step file upload (steps 1 & 2 & optional 3).
 
-    Step 1: POST preflight to get upload_url + upload_params (NO masquerading)
+    Step 1: POST preflight to get upload_url + upload_params + file_id
     Step 2: POST the file to upload_url
-    Step 3: Follow redirect with masquerading to access student's file
+    Step 3: (SKIPPED for submission files to avoid 403/401 errors)
 
-    When uploading to a student's submission file area, the confirmation URL
-    points to a file in the student's context. We use as_user_id in Step 3 ONLY
-    to access that file.
+    For submission file uploads, the file ID is extracted from Step 1's response.
+    This avoids the need to access the confirmation URL, which would fail with
+    "Invalid as_user_id" or 403 Forbidden errors.
 
     Returns the file_id of the newly created Canvas file.
     """
-    # Build masquerade query string for Step 3 only
-    masq = f"as_user_id={as_user_id}" if as_user_id else ""
-
-    # Step 1: Preflight
-    # CRITICAL: Do NOT use as_user_id here - causes "Invalid as_user_id" error
+    # Step 1: Preflight (NO as_user_id parameter)
     preflight = canvas_api_request(
         preflight_url,
         method="POST",
@@ -1225,6 +1222,33 @@ def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
 
     upload_url = preflight["upload_url"]
     upload_params = preflight.get("upload_params", {})
+    
+    # EXTRACT FILE ID FROM STEP 1 RESPONSE
+    file_id = None
+    
+    # Method 1: Direct ID in response
+    if "id" in preflight:
+        file_id = preflight["id"]
+        logging.info("Got file ID from preflight response: %s", file_id)
+    
+    # Method 2: Extract from success_action_redirect URL
+    # Format: https://canvas.../api/v1/files/FILE_ID/create_success?uuid=...
+    if not file_id and "success_action_redirect" in upload_params:
+        redirect_url = upload_params["success_action_redirect"]
+        match = re.search(r'/files/(\d+)/', redirect_url)
+        if match:
+            file_id = int(match.group(1))
+            logging.info("Extracted file ID from redirect URL: %s", file_id)
+    
+    # Method 3: Extract from Location header pattern (backup)
+    # Some Canvas instances put it in other params
+    for key, value in upload_params.items():
+        if isinstance(value, str) and '/files/' in value:
+            match = re.search(r'/files/(\d+)/', value)
+            if match:
+                file_id = int(match.group(1))
+                logging.info("Extracted file ID from upload_params[%s]: %s", key, file_id)
+                break
 
     # Step 2: Upload the actual file
     # No auth token here — the upload_url is pre-signed by Canvas.
@@ -1234,67 +1258,76 @@ def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
         data=upload_params,
         files={"file": (filename, zip_buf, "application/zip")},
         timeout=60,
-        allow_redirects=False,  # Handle redirects manually per Canvas docs
+        allow_redirects=False,  # Handle redirects manually
     )
 
     # Step 3: Handle the response
-    #   - 3XX redirect: follow it with an authenticated GET to finalize
-    #   - 201 Created:  file data may be at Location header (GET it)
-    #   - 200 OK:       file data is in the response body directly
-    #
-    # NOW we add as_user_id to the confirmation GET, because the
-    # file belongs to the student and we need to masquerade to access it.
+    # If we got the file ID from Step 1, we're done! Skip confirmation.
+    if file_id:
+        # Verify the upload succeeded
+        if resp.status_code in (200, 201, 301, 302, 303, 307, 308):
+            logging.info("File upload complete, using file ID: %s", file_id)
+            return file_id
+        else:
+            # Upload failed
+            resp.raise_for_status()
+    
+    # Fallback: Traditional confirmation flow (for non-submission uploads)
+    # This path should only be used for uploads where we don't have the file ID
+    # and where the instructor token has access to the file (e.g., comment files)
     headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
 
     if resp.status_code in (301, 302, 303, 307, 308):
         location = resp.headers["Location"]
-        # Add masquerading to the confirmation URL
-        if masq:
-            sep = "&" if "?" in location else "?"
-            location = f"{location}{sep}{masq}"
         confirm = requests.get(location, headers=headers, timeout=30)
         confirm.raise_for_status()
         file_data = confirm.json()
+        return file_data["id"]
     elif resp.status_code == 201:
         location = resp.headers.get("Location")
         if location:
-            # Add masquerading to the confirmation URL
-            if masq:
-                sep = "&" if "?" in location else "?"
-                location = f"{location}{sep}{masq}"
             confirm = requests.get(location, headers=headers, timeout=30)
             confirm.raise_for_status()
             file_data = confirm.json()
+            return file_data["id"]
         else:
             file_data = resp.json()
+            return file_data.get("id")
+    elif resp.status_code == 200:
+        # Sometimes returns 200 with JSON body
+        try:
+            file_data = resp.json()
+            return file_data.get("id")
+        except:
+            # If we can't parse JSON and don't have file_id, we're stuck
+            raise RuntimeError("File upload succeeded but couldn't extract file ID")
     else:
         resp.raise_for_status()
-        file_data = resp.json()
 
-    return file_data["id"]
 
 def _upload_submission_file(assignment_id, student_id, filename, zip_buf):
     """Upload a file for use as an actual submission (online_upload).
 
-    Uses masquerading on Step 3 (confirmation URL) so the instructor token 
-    can access the file that was created in the student's context.
+    The file ID is extracted from the preflight response to avoid accessing
+    the confirmation URL (which would fail with 401 or 403 errors).
     """
     preflight_url = (
         f"courses/{COURSE_ID}/assignments/{assignment_id}"
         f"/submissions/{student_id}/files"
     )
-    # Pass as_user_id for use in Step 3 only
-    return _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=student_id)
+    # No as_user_id - it's not allowed anywhere in the file upload flow
+    return _canvas_upload_file(preflight_url, filename, zip_buf)
+
 
 def _upload_comment_file(assignment_id, student_id, filename, zip_buf):
-    """Upload a file for use as a submission comment attachment."""
+    """Upload a file for use as a submission comment attachment.
+    """
     preflight_url = (
         f"courses/{COURSE_ID}/assignments/{assignment_id}"
         f"/submissions/{student_id}/comments/files"
     )
-    # Comment file uploads are done as the instructor — no masquerade needed
-    # (this was the original working behavior).
     return _canvas_upload_file(preflight_url, filename, zip_buf)
+ zip_buf)
 
 
 def _create_submission(assignment_id, student_id, file_id, timestamp):
