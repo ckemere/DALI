@@ -1188,14 +1188,184 @@ def pcb_drc_report(assignment_id, slug):
     return send_file(html_path, mimetype="text/html")
 
 # =============================================================================
+# CANVAS FILE UPLOAD HELPERS
+# =============================================================================
+
+# Set to True to submit as an actual Canvas submission (online_upload).
+# Set to False to use the old behavior (comment attachment only).
+SUBMIT_AS_UPLOAD = os.environ.get("SUBMIT_AS_UPLOAD", "true").lower() in ("true", "1", "yes")
+
+
+def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
+    """
+    Perform the Canvas 3-step file upload (steps 1 & 2 & 3).
+
+    Step 1: POST preflight to get upload_url + upload_params
+    Step 2: POST the file to upload_url
+    Step 3: Follow any redirect (3XX) to finalize the file
+
+    When uploading to a student's submission file area using an instructor
+    token, the redirect confirmation URL points to the student's file
+    context.  The instructor token alone gets a 403 on that URL.  Passing
+    as_user_id tells Canvas to masquerade as the student for the
+    confirmation GET (and the preflight POST), which resolves this.
+
+    The calling user (instructor) must have the "Become other users"
+    permission in Canvas (typically granted to all admins/instructors).
+
+    Returns the file_id of the newly created Canvas file.
+    """
+    # Build masquerade query string if needed
+    masq = f"as_user_id={as_user_id}" if as_user_id else ""
+
+    # Step 1: Preflight
+    # Append masquerade to the preflight URL so the file is created in
+    # the student's context.
+    preflight_endpoint = preflight_url
+    if masq:
+        sep = "&" if "?" in preflight_endpoint else "?"
+        preflight_endpoint = f"{preflight_endpoint}{sep}{masq}"
+
+    preflight = canvas_api_request(
+        preflight_endpoint,
+        method="POST",
+        data={
+            "name": filename,
+            "size": zip_buf.getbuffer().nbytes,
+            "content_type": "application/zip",
+        },
+    )
+
+    upload_url = preflight["upload_url"]
+    upload_params = preflight.get("upload_params", {})
+
+    # Step 2: Upload the actual file
+    # No auth token here — the upload_url is pre-signed by Canvas.
+    zip_buf.seek(0)
+    resp = requests.post(
+        upload_url,
+        data=upload_params,
+        files={"file": (filename, zip_buf, "application/zip")},
+        timeout=60,
+        allow_redirects=False,  # Handle redirects manually per Canvas docs
+    )
+
+    # Step 3: Handle the response
+    #   - 3XX redirect: follow it with an authenticated GET to finalize
+    #   - 201 Created:  file data may be at Location header (GET it)
+    #   - 200 OK:       file data is in the response body directly
+    #
+    # For the confirmation GET we must also masquerade, because the
+    # redirect URL (e.g. /api/v1/files/NNN) is in the student's file
+    # context and the instructor token alone is not authorized.
+    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+
+    if resp.status_code in (301, 302, 303, 307, 308):
+        location = resp.headers["Location"]
+        if masq:
+            sep = "&" if "?" in location else "?"
+            location = f"{location}{sep}{masq}"
+        confirm = requests.get(location, headers=headers, timeout=30)
+        confirm.raise_for_status()
+        file_data = confirm.json()
+    elif resp.status_code == 201:
+        location = resp.headers.get("Location")
+        if location:
+            if masq:
+                sep = "&" if "?" in location else "?"
+                location = f"{location}{sep}{masq}"
+            confirm = requests.get(location, headers=headers, timeout=30)
+            confirm.raise_for_status()
+            file_data = confirm.json()
+        else:
+            file_data = resp.json()
+    else:
+        resp.raise_for_status()
+        file_data = resp.json()
+
+    return file_data["id"]
+
+
+def _upload_submission_file(assignment_id, student_id, filename, zip_buf):
+    """Upload a file for use as an actual submission (online_upload).
+
+    Uses masquerading (as_user_id) so the file is created in the student's
+    context and the instructor token can access the confirmation URL.
+    """
+    preflight_url = (
+        f"courses/{COURSE_ID}/assignments/{assignment_id}"
+        f"/submissions/{student_id}/files"
+    )
+    return _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=student_id)
+
+
+def _upload_comment_file(assignment_id, student_id, filename, zip_buf):
+    """Upload a file for use as a submission comment attachment."""
+    preflight_url = (
+        f"courses/{COURSE_ID}/assignments/{assignment_id}"
+        f"/submissions/{student_id}/comments/files"
+    )
+    # Comment file uploads are done as the instructor — no masquerade needed
+    # (this was the original working behavior).
+    return _canvas_upload_file(preflight_url, filename, zip_buf)
+
+
+def _create_submission(assignment_id, student_id, file_id, timestamp):
+    """
+    Create an actual Canvas submission (online_upload) on behalf of the student.
+
+    The API token must belong to a user with grading permission on the course
+    (instructor / TA) in order to use submission[user_id] for on-behalf-of
+    submission.
+
+    The assignment must include 'online_upload' in its submission_types.
+    """
+    canvas_api_request(
+        f"courses/{COURSE_ID}/assignments/{assignment_id}/submissions",
+        method="POST",
+        data={
+            "submission": {
+                "submission_type": "online_upload",
+                "file_ids": [file_id],
+                "user_id": student_id,
+            },
+            # Also add a comment so there's an audit trail
+            "comment": {
+                "text_comment": f"Submitted via DALI at {timestamp}",
+            },
+        },
+    )
+
+
+def _attach_comment(assignment_id, student_id, file_id, timestamp):
+    """Attach a file as a submission comment (original behavior)."""
+    canvas_api_request(
+        f"courses/{COURSE_ID}/assignments/{assignment_id}"
+        f"/submissions/{student_id}",
+        method="PUT",
+        data={
+            "comment": {
+                "text_comment": f"Submitted via DALI at {timestamp}",
+                "file_ids": [file_id],
+            }
+        },
+    )
+
+# =============================================================================
 # ROUTES – SUBMISSION
 # =============================================================================
 
 @app.route("/submit/<assignment_id>", methods=["POST"])
 def submit(assignment_id):
     """
-    Build a zip of template + student files, then upload it to Canvas
-    as a submission comment attachment.
+    Build a zip of template + student files, then upload it to Canvas.
+
+    If SUBMIT_AS_UPLOAD is True (default), this creates an actual Canvas
+    submission of type online_upload, so the zip appears in SpeedGrader
+    as the student's submission — not just a comment.
+
+    If SUBMIT_AS_UPLOAD is False, falls back to the original behavior of
+    uploading the zip as a submission comment attachment.
     """
     if "student_id" not in session:
         return jsonify(error="Not authenticated"), 403
@@ -1232,49 +1402,16 @@ def submit(assignment_id):
         netid = session.get("netid", session["student_id"])
         zip_filename = f"{lab['display_name'].replace(' ', '_')}_{netid}.zip"
         student_id = session["student_id"]
-
-        # Step 1: Preflight
-        preflight = canvas_api_request(
-            f"courses/{COURSE_ID}/assignments/{assignment_id}"
-            f"/submissions/{student_id}/comments/files",
-            method="POST",
-            data={
-                "name": zip_filename,
-                "size": zip_buf.getbuffer().nbytes,
-                "content_type": "application/zip",
-            },
-        )
-
-        upload_url = preflight["upload_url"]
-        upload_params = preflight.get("upload_params", {})
-
-        # Step 2: Upload
-        zip_buf.seek(0)
-        resp = requests.post(
-            upload_url,
-            data=upload_params,
-            files={"file": (zip_filename, zip_buf, "application/zip")},
-            timeout=60,
-        )
-        resp.raise_for_status()
-        file_data = resp.json()
-        file_id = file_data["id"]
-
-        # Step 3: Create submission comment
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        canvas_api_request(
-            f"courses/{COURSE_ID}/assignments/{assignment_id}"
-            f"/submissions/{student_id}",
-            method="PUT",
-            data={
-                "comment": {
-                    "text_comment": f"Submitted via DALI at {timestamp}",
-                    "file_ids": [file_id],
-                }
-            },
-        )
 
-        # Step 4: Post score if scoring is configured
+        if SUBMIT_AS_UPLOAD:
+            file_id = _upload_submission_file(assignment_id, student_id, zip_filename, zip_buf)
+            _create_submission(assignment_id, student_id, file_id, timestamp)
+        else:
+            file_id = _upload_comment_file(assignment_id, student_id, zip_filename, zip_buf)
+            _attach_comment(assignment_id, student_id, file_id, timestamp)
+
+        # ---- Post score if scoring is configured ----
         scoring = lab.get("scoring")
         score = None
         if scoring:
@@ -1302,10 +1439,13 @@ def submit(assignment_id):
                 )
             except Exception as e:
                 logging.error("Failed to post score for %s: %s", netid, e)
+                # Don't fail the submission just because grading failed
 
         logging.info(
-            "Student %s (%s) submitted assignment %s as comment (file_id=%s)",
-            netid, student_id, assignment_id, file_id,
+            "Student %s (%s) submitted assignment %s (mode=%s, file_id=%s)",
+            netid, student_id, assignment_id,
+            "upload" if SUBMIT_AS_UPLOAD else "comment",
+            file_id,
         )
 
         msg = "Submitted successfully to Canvas!"
@@ -1485,6 +1625,7 @@ def health():
         active_jobs=active_count,
         roster_loaded=len(STUDENT_ROSTER),
         labs_loaded={aid: cfg["display_name"] for aid, cfg in LAB_CONFIGS.items()},
+        submit_mode="online_upload" if SUBMIT_AS_UPLOAD else "comment_attachment",
     )
 
 # =============================================================================
