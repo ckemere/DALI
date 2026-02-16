@@ -1194,9 +1194,15 @@ def pcb_drc_report(assignment_id, slug):
 # Set to True to submit as an actual Canvas submission (online_upload).
 # Set to False to use the old behavior (comment attachment only).
 SUBMIT_AS_UPLOAD = os.environ.get("SUBMIT_AS_UPLOAD", "true").lower() in ("true", "1", "yes")
+
 def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
     """
-    Debug version to figure out where the file ID is in the response.
+    Perform the Canvas 3-step file upload (steps 1 & 2, skip 3).
+
+    For newer Canvas instances, the file ID is in the Location header
+    from Step 2's response, not in Step 1's preflight response.
+
+    Returns the file_id of the newly created Canvas file.
     """
     # Step 1: Preflight (NO as_user_id parameter)
     preflight = canvas_api_request(
@@ -1209,57 +1215,8 @@ def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
         },
     )
 
-    # DEBUG: Log the entire preflight response
-    logging.info("=" * 80)
-    logging.info("PREFLIGHT RESPONSE:")
-    logging.info(json.dumps(preflight, indent=2))
-    logging.info("=" * 80)
-
     upload_url = preflight["upload_url"]
     upload_params = preflight.get("upload_params", {})
-    
-    # DEBUG: Log upload_params separately
-    logging.info("UPLOAD PARAMS:")
-    logging.info(json.dumps(upload_params, indent=2))
-    logging.info("=" * 80)
-    
-    # EXTRACT FILE ID FROM STEP 1 RESPONSE
-    file_id = None
-    
-    # Method 1: Direct ID in response
-    if "id" in preflight:
-        file_id = preflight["id"]
-        logging.info("✓ Got file ID from preflight['id']: %s", file_id)
-    
-    # Method 2: Extract from success_action_redirect URL
-    if not file_id and "success_action_redirect" in upload_params:
-        redirect_url = upload_params["success_action_redirect"]
-        logging.info("Checking success_action_redirect: %s", redirect_url)
-        match = re.search(r'/files/(\d+)/', redirect_url)
-        if match:
-            file_id = int(match.group(1))
-            logging.info("✓ Extracted file ID from redirect URL: %s", file_id)
-        else:
-            logging.warning("✗ Could not extract file ID from redirect URL")
-    
-    # Method 3: Check all upload_params for file ID patterns
-    if not file_id:
-        logging.info("Searching all upload_params for file ID...")
-        for key, value in upload_params.items():
-            if isinstance(value, str) and '/files/' in value:
-                logging.info("  Found '/files/' in upload_params['%s']: %s", key, value)
-                match = re.search(r'/files/(\d+)', value)
-                if match:
-                    file_id = int(match.group(1))
-                    logging.info("  ✓ Extracted file ID: %s", file_id)
-                    break
-
-    if not file_id:
-        logging.error("=" * 80)
-        logging.error("FAILED TO EXTRACT FILE ID FROM STEP 1!")
-        logging.error("This means we'll have to try the confirmation URL,")
-        logging.error("which will likely fail with 403 Forbidden")
-        logging.error("=" * 80)
 
     # Step 2: Upload the actual file
     zip_buf.seek(0)
@@ -1268,65 +1225,74 @@ def _canvas_upload_file(preflight_url, filename, zip_buf, as_user_id=None):
         data=upload_params,
         files={"file": (filename, zip_buf, "application/zip")},
         timeout=60,
-        allow_redirects=False,
+        allow_redirects=False,  # CRITICAL: Don't auto-follow redirects
     )
 
-    logging.info("Step 2 upload response status: %s", resp.status_code)
-
-    # Step 3: If we have file_id, skip confirmation and return it
-    if file_id:
-        if resp.status_code in (200, 201, 301, 302, 303, 307, 308):
-            logging.info("SUCCESS! Returning file ID: %s (skipped confirmation)", file_id)
-            return file_id
-        else:
-            logging.error("Step 2 failed with status %s", resp.status_code)
-            resp.raise_for_status()
+    # Step 3: Extract file ID from Location header (don't follow it!)
+    # The Location header format is: https://canvas.../api/v1/files/FILE_ID?...
     
-    # Fallback: We don't have the file ID, so we have to try confirmation
-    # This will likely fail with 403
-    logging.warning("No file ID from Step 1, attempting confirmation URL...")
-    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
-
-    if resp.status_code in (301, 302, 303, 307, 308):
-        location = resp.headers["Location"]
-        logging.info("Following redirect to: %s", location)
-        confirm = requests.get(location, headers=headers, timeout=30)
-        confirm.raise_for_status()  # This is where the 403 error happens
-        file_data = confirm.json()
-        return file_data["id"]
-    elif resp.status_code == 201:
+    if resp.status_code == 201:
         location = resp.headers.get("Location")
         if location:
-            logging.info("Following 201 Location to: %s", location)
-            confirm = requests.get(location, headers=headers, timeout=30)
-            confirm.raise_for_status()
-            file_data = confirm.json()
-            return file_data["id"]
-        else:
+            # Extract file ID from Location header
+            # Example: https://canvas.rice.edu/api/v1/files/7332962?include%5B%5D=...
+            match = re.search(r'/files/(\d+)', location)
+            if match:
+                file_id = int(match.group(1))
+                logging.info("Extracted file ID from Step 2 Location header: %s", file_id)
+                return file_id
+            else:
+                logging.error("Could not extract file ID from Location: %s", location)
+        
+        # Fallback: Try to get from response body
+        try:
             file_data = resp.json()
-            return file_data.get("id")
-    else:
-        resp.raise_for_status()
-        file_data = resp.json()
-        return file_data.get("id")
+            if "id" in file_data:
+                return file_data["id"]
+        except:
+            pass
+    
+    elif resp.status_code in (301, 302, 303, 307, 308):
+        # 3XX redirect - file ID is in Location header
+        location = resp.headers.get("Location")
+        if location:
+            match = re.search(r'/files/(\d+)', location)
+            if match:
+                file_id = int(match.group(1))
+                logging.info("Extracted file ID from Step 2 redirect: %s", file_id)
+                return file_id
+    
+    elif resp.status_code == 200:
+        # Direct success - file ID might be in response body
+        try:
+            file_data = resp.json()
+            if "id" in file_data:
+                return file_data["id"]
+        except:
+            pass
+    
+    # If we get here, something went wrong
+    logging.error("Could not extract file ID from upload response")
+    logging.error("Status: %s", resp.status_code)
+    logging.error("Headers: %s", dict(resp.headers))
+    resp.raise_for_status()
+    raise RuntimeError("File upload succeeded but couldn't extract file ID")
+
 
 def _upload_submission_file(assignment_id, student_id, filename, zip_buf):
     """Upload a file for use as an actual submission (online_upload).
 
-    The file ID is extracted from the preflight response to avoid accessing
-    the confirmation URL (which would fail with 401 or 403 errors).
+    The file ID is extracted from Step 2's Location header.
     """
     preflight_url = (
         f"courses/{COURSE_ID}/assignments/{assignment_id}"
         f"/submissions/{student_id}/files"
     )
-    # No as_user_id - it's not allowed anywhere in the file upload flow
     return _canvas_upload_file(preflight_url, filename, zip_buf)
 
 
 def _upload_comment_file(assignment_id, student_id, filename, zip_buf):
-    """Upload a file for use as a submission comment attachment.
-    """
+    """Upload a file for use as a submission comment attachment."""
     preflight_url = (
         f"courses/{COURSE_ID}/assignments/{assignment_id}"
         f"/submissions/{student_id}/comments/files"
