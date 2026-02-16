@@ -1327,7 +1327,6 @@ def _upload_comment_file(assignment_id, student_id, filename, zip_buf):
         f"/submissions/{student_id}/comments/files"
     )
     return _canvas_upload_file(preflight_url, filename, zip_buf)
- zip_buf)
 
 
 def _create_submission(assignment_id, student_id, file_id, timestamp):
