@@ -2,22 +2,22 @@
 
 ## Required Components
 
-Based on your CCS Makefile, DALI needs these TI components installed on your compilation server:
+DALI needs these TI components installed on the compilation server:
 
 ### 1. **TI ARM LLVM Compiler** (ti-cgt-armllvm)
 - Version: 4.0.4.LTS (or newer)
-- Your Mac path: `/Applications/ti/ccs2040/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS`
+- Mac path: `/Applications/ti/ccs2040/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS`
 - Linux path: `/opt/ti/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS`
 
 ### 2. **MSPM0 SDK**
 - Version: 2.09.00.01 (or newer)
-- Your Mac path: `/Users/ckemere/ti/mspm0_sdk_2_09_00_01`
+- Mac path: `/Users/ckemere/ti/mspm0_sdk_2_09_00_01`
 - Linux path: `/opt/ti/mspm0_sdk_2_09_00_01`
 
 ### 3. **Linker Script** (Critical!)
 - File: `mspm0g3507.cmd`
-- This defines memory layout for the MSPM0G3507
-- Must be in template_files for each lab
+- This defines the memory layout for the MSPM0G3507
+- Must be present in `template_files/` for each lab
 
 ### 4. **Driver Library**
 - File: `driverlib.a`
@@ -149,72 +149,13 @@ ls -l template_files/lab3/mspm0g3507.cmd
 
 ---
 
-## Integration with DALI
-
-### Update compile_queue.py
-
-Replace the `_create_makefile` method with the new generator:
-
-```python
-from makefile_generator import create_makefile_for_lab, ensure_linker_script
-
-def _compile(self, student_id, assignment_id, code_files, lab_name):
-    """Compile using proper TI Makefile"""
-    from app_api_complete import get_submission_folder, get_template_file_path
-    import os
-    import shutil
-    
-    build_dir = get_submission_folder(student_id, assignment_id)
-    template_dir = f'template_files/{lab_name}'
-    
-    # Ensure all source files present
-    for filename in code_files:
-        student_file = os.path.join(build_dir, filename)
-        if not os.path.exists(student_file):
-            template_file = get_template_file_path(lab_name, filename)
-            if os.path.exists(template_file):
-                shutil.copy(template_file, student_file)
-    
-    # Critical: Ensure linker script is present
-    ensure_linker_script(build_dir, template_dir)
-    
-    # Generate proper Makefile
-    create_makefile_for_lab(build_dir, code_files, lab_name)
-    
-    # Compile!
-    try:
-        result = subprocess.run(
-            ['make', 'clean', 'all'],
-            cwd=build_dir,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        return {
-            'success': result.returncode == 0,
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'exit_code': result.returncode
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            'success': False,
-            'error': 'Compilation timeout (>30 seconds)',
-            'stdout': '',
-            'stderr': 'Timeout'
-        }
-```
-
----
-
 ## Required Files Per Lab
 
 For each lab in `template_files/labX/`, you need:
 
 ```
 template_files/lab3/
-├── hw_interface.c          # Your template code
+├── hw_interface.c
 ├── hw_interface.h
 ├── lab3.c
 ├── startup_mspm0g350x_ticlang.c
@@ -222,6 +163,9 @@ template_files/lab3/
 ├── state_machine_logic.h
 └── mspm0g3507.cmd         # ⚠️ CRITICAL - linker script!
 ```
+
+`makefile_generator.py` auto-discovers all `.c` and `.h` files and locates
+the `.cmd` file. No manual Makefile editing is needed when adding labs.
 
 ---
 
@@ -249,7 +193,7 @@ export TI_SDK_ROOT=/opt/ti/mspm0_sdk_2_09_00_01
 
 ### "mspm0g3507.cmd: No such file"
 
-**Problem:** Linker script missing  
+**Problem:** Linker script missing from lab template directory  
 **Fix:**
 ```bash
 # Copy from your CCS project to each lab template
@@ -260,13 +204,11 @@ cp /path/to/ccs/project/mspm0g3507.cmd template_files/lab4/
 
 ### "undefined reference to __TI_*"
 
-**Problem:** Wrong compiler library path  
+**Problem:** Compiler library path not found  
 **Fix:**
 ```bash
-# Make sure linker can find compiler libraries
+# Verify TI_COMPILER_ROOT is set correctly
 export TI_COMPILER_ROOT=/opt/ti/ti-cgt-armllvm_4.0.4.LTS
-
-# Verify
 ls $TI_COMPILER_ROOT/lib
 ```
 
@@ -274,25 +216,30 @@ ls $TI_COMPILER_ROOT/lib
 
 **Debug steps:**
 ```bash
-# 1. Check what CCS actually runs
-# In CCS: Project → Show Build Settings → Copy command
+# 1. Run a manual test compilation
+mkdir -p /tmp/test_compile
+cp template_files/lab3/* /tmp/test_compile/
+cd /tmp/test_compile
 
-# 2. Compare with DALI Makefile
-cd uploads/student_123/assignment_456
-make config  # Shows DALI configuration
+python3 -c "
+from makefile_generator import create_makefile_for_lab
+sources = ['hw_interface.c', 'lab3.c', 'startup_mspm0g350x_ticlang.c', 'state_machine_logic.c']
+create_makefile_for_lab('.', sources, 'test')
+"
+make clean all
 
-# 3. Run make with verbose output
+# 2. Run make with verbose output to see exact flags
 make clean all VERBOSE=1
 
-# 4. Check environment
+# 3. Check environment variables are visible to the worker process
 env | grep TI
 ```
 
 ---
 
-## Compiler Flags Explained
+## Compiler Flags
 
-From your CCS Makefile:
+Flags used by `makefile_generator.py`, matching a stock CCS Lab 3 build:
 
 | Flag | Purpose |
 |------|---------|
@@ -305,100 +252,11 @@ From your CCS Makefile:
 | `-D__MSPM0G3507__` | Define device macro |
 | `-g` | Include debug symbols |
 
-These are all included in the DALI Makefile generator! ✓
-
 ---
 
 ## Performance Notes
 
-**Compilation time per student:**
-- Clean build: ~5 seconds
-- Incremental (changed 1 file): ~2 seconds
-
-**With 16 workers:**
-- 50 students: ~18 seconds total
-- Peak throughput: ~200 compilations/minute
-
----
-
-## Testing
-
-### Test Manually
-
-```bash
-# Create test directory
-mkdir -p /tmp/test_compile
-cd /tmp/test_compile
-
-# Copy template files
-cp template_files/lab3/* .
-
-# Generate Makefile
-python3 << EOF
-from makefile_generator import create_makefile_for_lab
-sources = ['hw_interface.c', 'lab3.c', 'startup_mspm0g350x_ticlang.c', 'state_machine_logic.c']
-create_makefile_for_lab('.', sources, 'test')
-EOF
-
-# Compile
-make clean all
-
-# Check output
-ls -lh test.out
-# Should see ~20-30KB firmware file
-```
-
-### Test with DALI
-
-```bash
-# Start DALI with test configuration
-export TI_COMPILER_ROOT=/opt/ti/ti-cgt-armllvm_4.0.4.LTS
-export TI_SDK_ROOT=/opt/ti/mspm0_sdk_2_09_00_01
-
-python3 app_api_complete.py
-
-# Upload test files as a student
-# Click "Test Compilation"
-# Check logs for errors
-```
-
----
-
-## Next Steps
-
-1. ✅ Install TI toolchain on Linux server
-2. ✅ Set environment variables
-3. ✅ Copy linker script to all lab templates
-4. ✅ Update compile_queue.py to use new Makefile generator
-5. ✅ Test compilation manually
-6. ✅ Test through DALI interface
-7. ✅ Roll out to students
-
----
-
-## Questions?
-
-**Where to get TI tools?**
-- https://www.ti.com/tool/CCSTUDIO
-- https://www.ti.com/tool/ARM-CGT-CLANG
-- https://www.ti.com/tool/MSPM0-SDK
-
-**Do I need a license?**
-- Compiler: Free (no license needed)
-- CCS: Free with registration
-- SDK: Free
-
-**Can students download these?**
-- Yes, all free from TI website
-- But DALI compiles server-side, so only you need to install
-
-**What if I upgrade SDK version?**
-- Update `TI_SDK_ROOT` environment variable
-- Update path in `makefile_generator.py` if needed
-- Test compilation with new SDK
-
----
-
-**⏰ Ready to compile!**
-
-*Time to make those embedded systems work*
+- Clean build: ~5 seconds per student
+- Incremental (one changed file): ~2 seconds
+- With 8 workers: 50 students ≈ 35 seconds total
+- With 16 workers: 50 students ≈ 18 seconds total

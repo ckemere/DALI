@@ -1,13 +1,13 @@
-# Compilation Queue System - Setup Guide
+# Compilation Queue Setup
 
 ## Overview
 
-This system provides:
-- ✅ **Queue position tracking** - Students see "You are #5 in queue"
-- ✅ **NetID mapping** - Admin dashboard shows Rice netIDs
-- ✅ **Job cancellation** - Students can cancel queued jobs
-- ✅ **Admin dashboard** - Real-time view of all compilation jobs
-- ✅ **Multi-core compilation** - Parallel processing with 16 workers
+The compilation queue provides:
+- **Queue position tracking** — students see "You are #5 in queue"
+- **NetID display** — admin dashboard shows Rice netIDs, not Canvas IDs
+- **Job cancellation** — students can cancel queued jobs
+- **Admin dashboard** — real-time view of all compilation jobs at `/admin/compile-queue`
+- **Multi-core compilation** — parallel processing (default: 8 workers, tunable)
 
 ## Architecture
 
@@ -16,16 +16,16 @@ Student clicks "Test Compilation"
     ↓
 Job added to Redis queue
     ↓
-Worker picks up job (one of 16)
+compile_worker_main.py picks up job
     ↓
-Compiles in student's directory
+Compiles in a temporary build directory
     ↓
-Result stored in Redis
+Result stored in Redis + written to student folder
     ↓
 Student sees results
 ```
 
-**No Docker needed!** Simple, fast, efficient.
+No Docker needed — direct `tiarmclang` invocation via `makefile_generator.py`.
 
 ## Installation
 
@@ -35,401 +35,188 @@ Student sees results
 # Ubuntu/Debian
 sudo apt update
 sudo apt install redis-server
+sudo systemctl enable redis
+sudo systemctl start redis
 
 # macOS
 brew install redis
-
-# Start Redis
-sudo systemctl start redis  # Linux
-brew services start redis   # macOS
+brew services start redis
 ```
 
 ### 2. Install Python Dependencies
 
 ```bash
-pip install redis
+pip install -r requirements.txt
 ```
 
-Add to `requirements_api.txt`:
+Redis is already listed in `requirements.txt`. If adding manually:
 ```
 redis==4.5.4
 ```
 
-### 3. Install Ti-ArmClang
+### 3. Install the TI ARM Clang Toolchain
 
-Install Ti-ArmClang compiler on your server (follow TI's instructions).
+See `docs/TI_TOOLCHAIN_SETUP.md` for full instructions. The short version:
 
-Make sure it's in PATH:
+```bash
+export TI_COMPILER_ROOT="/path/to/ti-cgt-armllvm_4.0.4.LTS"
+export TI_SDK_ROOT="/path/to/mspm0_sdk_2_09_00_01"
+export PATH="$TI_COMPILER_ROOT/bin:$PATH"
+```
+
+Verify:
 ```bash
 which tiarmclang
-# Should return: /opt/ti-armclang/bin/tiarmclang (or similar)
+python3 -c "from makefile_generator import verify_toolchain; print(verify_toolchain())"
+# (True, 'Toolchain verified successfully')
 ```
 
-### 4. Add Files to Your Project
+### 4. Configure Environment Variables
 
-Copy these files to your project:
-- `compile_queue.py` - Queue management system
-- `compile_routes.py` - Flask routes
-- `templates/compile_section.html` - Student UI
-- `templates/admin_queue.html` - Admin dashboard
-- `templates/admin_login.html` - Admin login
-
-### 5. Update app_api_complete.py
-
-Add at the top:
-```python
-from compile_queue import init_compile_queue, compile_queue
-
-# Initialize queue on startup
-compile_queue = init_compile_queue()
-```
-
-Add the routes from `compile_routes.py` to your app.
-
-### 6. Export Gradebook from Canvas
-
-Download your Canvas gradebook as CSV:
-1. Canvas → Gradebook → Export
-2. Save as `gradebook.csv` in your project folder
-
-The CSV should have columns like:
-```
-Student,ID,SIS User ID,SIS Login ID,Section
-John Doe,106586,,jd123,001
-```
-
-### 7. Configure Environment
-
-Add to `.env`:
-```bash
-# Gradebook path (for netID mapping)
-GRADEBOOK_CSV_PATH=gradebook.csv
-
-# Admin password for queue dashboard
-ADMIN_PASSWORD=your_secure_password_here
-```
-
-### 8. Create Linker Script
-
-Each lab needs a linker script. Create `template_files/lab3/linker.lds`:
-
-```ld
-/* Basic linker script for MSPM0G3507 */
-MEMORY
-{
-    FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 128K
-    SRAM (rwx) : ORIGIN = 0x20000000, LENGTH = 32K
-}
-
-SECTIONS
-{
-    .text : {
-        *(.text*)
-        *(.rodata*)
-    } > FLASH
-    
-    .data : {
-        *(.data*)
-    } > SRAM AT > FLASH
-    
-    .bss : {
-        *(.bss*)
-    } > SRAM
-}
-```
-
-Copy this to each student's directory during compilation.
-
-### 9. Test the System
+Add to your `.env` (or export directly):
 
 ```bash
-# Start Redis
-redis-server &
+# Redis
+export REDIS_HOST="localhost"       # default
+export REDIS_PORT="6379"            # default
 
-# Start your app
-python3 app_api_complete.py
+# Admin dashboard password
+export ADMIN_PASSWORD="your_secure_password_here"
+
+# Worker tuning (optional)
+export COMPILE_WORKERS="8"          # default: 8; set to match core count
+export COMPILE_MAX_RUNTIME="60"     # seconds per job, default: 60
+export COMPILE_STALE_SECONDS="30"   # heartbeat timeout, default: 30
 ```
 
-**Test as student:**
+The roster-to-netID mapping is loaded automatically from `ROSTER_CSV_PATH`
+(default: `student_passwords.csv`) — no separate gradebook export needed.
+
+### 5. Add the Linker Script to Each Lab Template
+
+Each lab directory needs the TI `.cmd` linker script. See
+`docs/TI_TOOLCHAIN_SETUP.md → "Add Linker Script to Templates"` for how to
+extract it from CCS.
+
+```bash
+cp mspm0g3507.cmd template_files/lab3/
+# repeat for each lab
+```
+
+### 6. Run the System
+
+Three processes must be running:
+
+```bash
+# Terminal 1: Redis (if not running as a service)
+redis-server
+
+# Terminal 2: Flask web app
+python3 app_complete.py
+# or with gunicorn:
+gunicorn app_complete:app --workers 4 --worker-class gevent \
+    --worker-connections 100 --timeout 120 --bind 0.0.0.0:5000
+
+# Terminal 3: Compile worker(s)
+python3 compile_worker_main.py
+```
+
+### 7. Test the System
+
+**As a student:**
 1. Go to `http://localhost:5000`
-2. Login, select assignment
+2. Log in, select an assignment
 3. Click "🔨 Test Compilation"
 4. See queue position: "Position in queue: #1"
-5. Wait for compilation
-6. See results
+5. Wait for compilation, see results
 
-**Test as admin:**
+**As admin:**
 1. Go to `http://localhost:5000/admin/compile-queue`
 2. Enter admin password
-3. See all active jobs with netIDs
+3. See all active jobs with netIDs and timing
+
+---
 
 ## Student Workflow
 
-### Upload Files
-1. Login to system
-2. Select Lab 3
-3. Upload modified files
+1. Log in → select assignment → upload files
+2. Click **"🔨 Test Compilation"**
+3. Status updates in real time:
+   - `⏳ In Queue — Position #3, estimated wait: 8 seconds`
+   - `⚙️ Compiling...`
+   - `✅ Compilation Successful!` or `❌ Compilation Failed` with error output
+4. Fix errors, re-upload, compile again
+5. When green, click **"Submit to Canvas"**
 
-### Test Compilation
-1. Click "🔨 Test Compilation"
-2. See queue status:
-   - "⏳ In Queue - Position #3"
-   - "Estimated wait: 8 seconds"
-3. Click "Cancel" if needed
-4. Watch status change to "⚙️ Compiling..."
-5. See results:
-   - ✅ "Compilation Successful!"
-   - ❌ "Compilation Failed" with errors
+Students can cancel a queued job (not one already compiling) at any time.
 
-### Fix and Retest
-1. View errors
-2. Upload fixed file
-3. Click "Test Compilation" again
-4. Repeat until successful
+---
 
-### Submit
-1. After successful compilation
-2. Click "Submit to Canvas"
-3. Done!
+## Admin Dashboard
 
-## Admin Dashboard Features
+Access: `http://yourserver/admin/compile-queue`
 
-### Access
+Shows a live table of all queued and active jobs:
+
 ```
-http://yourserver.com/admin/compile-queue
-Password: your_secure_password
+Pos │ NetID │ Student Name │ Assignment │ Status       │ Duration
+────┼───────┼──────────────┼────────────┼──────────────┼─────────
+ #1 │ jd123 │ John Doe     │ Lab 3      │ ⏳ Queued    │ 3s
+ #2 │ js456 │ Jane Smith   │ Lab 3      │ ⏳ Queued    │ 2s
+  — │ ba789 │ Bob Andrews  │ Lab 3      │ ⚙️ Compiling │ 7s
 ```
 
-### What You See
-```
-┌──────────────────────────────────────────┐
-│  🔨 Compilation Queue Dashboard          │
-├──────────────────────────────────────────┤
-│  Worker Capacity: 16                     │
-│  Jobs Queued: 5                          │
-│  Currently Compiling: 3                  │
-├──────────────────────────────────────────┤
-│ Pos │ NetID │ Student  │ Assignment│ ... │
-├─────┼───────┼──────────┼───────────┤     │
-│  #1 │ jd123 │ John Doe │ Lab 3     │ ... │
-│  #2 │ js456 │ Jane S   │ Lab 3     │ ... │
-│  —  │ ba789 │ Bob A    │ Lab 3     │ ... │ (compiling)
-└──────────────────────────────────────────┘
-```
+Auto-refreshes every 2 seconds. Useful during deadline rushes to monitor
+queue depth and spot students having repeated failures.
 
-**Features:**
-- Real-time updates (every 2 seconds)
-- See queue position
-- See who's compiling
-- See netIDs (not Canvas IDs)
-- Manual refresh button
-- Toggle auto-refresh
-
-### Use Cases
-
-**During deadline rush:**
-- Monitor queue length
-- See if system is keeping up
-- Identify students having issues
-
-**Debugging:**
-- See which student's job failed
-- Check compilation times
-- Verify netID mappings
-
-## Queue Behavior
-
-### Multiple Submissions
-Student clicks "Test Compilation" 3 times in a row:
-- 3 jobs added to queue
-- Student can cancel queued jobs
-- Only one compiles at a time
-
-**Better UX:** Disable button while job active (already implemented).
-
-### Load Balancing
-- 16 workers process jobs in parallel
-- Each compilation takes ~5 seconds
-- Max throughput: ~200 jobs/minute
-
-### Peak Load Scenario
-50 students submit in last 15 minutes:
-- Jobs queued: up to 50
-- Workers: 16 active simultaneously
-- Total time: ~16 seconds for all
-- Wait per student: <2 seconds average
-
-## Troubleshooting
-
-### "Connection refused" error
-**Problem:** Redis not running
-**Fix:** `sudo systemctl start redis`
-
-### "tiarmclang: command not found"
-**Problem:** Compiler not in PATH
-**Fix:** Add to PATH or use full path in Makefile
-
-### NetIDs showing as "canvas_106586"
-**Problem:** Gradebook not loaded
-**Fix:** Check `GRADEBOOK_CSV_PATH` and CSV format
-
-### Compilation timeout
-**Problem:** Code takes >30 seconds
-**Fix:** Check for infinite loops, increase timeout
-
-### Jobs stuck in queue
-**Problem:** Workers crashed
-**Fix:** Restart app (workers restart automatically)
+---
 
 ## Configuration Options
 
-### Change Worker Count
+### Worker count
 
-In `compile_queue.py`:
-```python
-compile_queue = CompilationQueue(max_workers=32)  # Default: 16
-```
-
-**Guidelines:**
-- 8 cores → 8 workers
-- 16 cores → 16 workers
-- 32 cores → 32 workers
-
-### Change Compilation Timeout
-
-In `compile_queue.py`, `_compile()` method:
-```python
-result = subprocess.run(
-    ['make', 'clean', 'all'],
-    cwd=build_dir,
-    capture_output=True,
-    text=True,
-    timeout=60  # Change from 30 to 60 seconds
-)
-```
-
-### Change Queue Check Interval
-
-Student UI (`compile_section.html`):
-```javascript
-setInterval(checkStatus, 2000);  // Check every 2 seconds
-```
-
-Admin dashboard (`admin_queue.html`):
-```javascript
-autoRefreshInterval = setInterval(refreshQueue, 2000);  // Refresh every 2 seconds
-```
-
-## Advanced Features
-
-### Email Notifications (Future)
-
-When compilation completes, email student:
-```python
-def send_completion_email(student_email, result):
-    # Use SendGrid, Mailgun, etc.
-    pass
-```
-
-### Compilation History (Future)
-
-Store all compilation results:
-```python
-# In compile_queue.py
-compile_queue.redis.zadd(
-    f'student:{student_id}:history',
-    {job_id: time.time()}
-)
-```
-
-### Priority Queue (Future)
-
-Give priority to certain students:
-```python
-# Use Redis sorted set instead of list
-compile_queue.redis.zadd('compile_queue', {
-    job_id: priority_score
-})
-```
-
-## Performance Metrics
-
-### Single Compilation
-- Queue add: <1ms
-- Compilation: 3-7 seconds
-- Result retrieval: <1ms
-- **Total: ~5 seconds**
-
-### 50 Concurrent Students
-- All jobs queued: <50ms
-- All completed: ~16 seconds
-- **Avg wait: 8 seconds**
-
-### 100 Concurrent Students
-- All jobs queued: <100ms
-- All completed: ~32 seconds
-- **Avg wait: 16 seconds**
-
-## Cost Analysis
-
-### Server Requirements
-For 50 students:
-- **8 cores, 16GB RAM**: $40-60/month (works but slower)
-- **16 cores, 32GB RAM**: $80-120/month (recommended)
-- **32 cores, 64GB RAM**: $160-240/month (overkill)
-
-### Redis Requirements
-- Memory: <100MB for queue
-- Disk: Minimal
-- **Cost: Free (included on server)**
-
-## Security Notes
-
-### Admin Password
-Use a strong password:
+Set via environment variable (preferred):
 ```bash
-export ADMIN_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+export COMPILE_WORKERS=16
 ```
 
-### Student Code Safety
-- Code compiled, not executed
-- 30-second timeout prevents resource exhaustion
-- Each student has isolated directory
-- Compiler runs as non-privileged user
+Or pass directly when instantiating `CompilationQueue` in `compile_queue.py`:
+```python
+compile_queue = CompilationQueue(max_workers=16)
+```
 
-### Redis Security
-If Redis exposed to internet:
+Match worker count to available cores. The default of 8 is conservative.
+
+### Compilation timeout
+
+Set via environment variable:
 ```bash
-# In /etc/redis/redis.conf
-bind 127.0.0.1  # Only localhost
-requirepass your_redis_password
+export COMPILE_MAX_RUNTIME=90   # seconds
 ```
 
-## Next Steps
+### Poll interval (student UI)
 
-1. ✅ Set up Redis
-2. ✅ Load gradebook CSV
-3. ✅ Install Ti-ArmClang
-4. ✅ Test with one student
-5. ✅ Test admin dashboard
-6. ✅ Load test with fake jobs
-7. ✅ Deploy to production
+In `templates/assignment_api.html`, the JavaScript polls every second by default.
+Adjust `setInterval(checkStatus, 1000)` if needed.
 
-## Questions?
+---
 
-**Q: Do I need Docker?**
-A: No! Direct compilation is simpler and faster.
+## Troubleshooting
 
-**Q: Can students see each other's jobs?**
-A: No. Students only see their own jobs.
+**"Connection refused" on compile submit**
+→ Redis is not running. `sudo systemctl start redis`
 
-**Q: What if Redis crashes?**
-A: Queue is lost but rebuilds when students resubmit. Consider Redis persistence.
+**"tiarmclang: command not found" in worker logs**
+→ `TI_COMPILER_ROOT` not set or not on `PATH`. Check `.env` and worker process environment.
 
-**Q: Can I use this for other courses?**
-A: Yes! Just update lab configs and gradebook CSV.
+**NetIDs showing as blank or "unknown"**
+→ The netID comes from `student_passwords.csv` (via `ROSTER_CSV_PATH`). Verify the
+   CSV has a `netid` column and the path is correct.
 
-**Q: How do I backup the queue?**
-A: Use Redis RDB snapshots: `save` in redis-cli
+**Jobs stuck in queue, never compiling**
+→ The worker process crashed or was never started. Check `compile_worker_main.py`
+   is running. Workers restart jobs automatically on startup.
 
-Ready to go! 🚀
+**Compilation timeout**
+→ Increase `COMPILE_MAX_RUNTIME`. Also check for missing `.cmd` linker script
+   in the lab template directory — a missing linker script causes `make` to hang.
