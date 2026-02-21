@@ -189,6 +189,7 @@ def load_lab_configs(template_folder):
                 "dru_files": dru_files,
                 "writeup_files": writeup_files,
                 "instructions": meta.get("instructions", ""),
+                "pre_compile_text": meta.get("pre_compile_text", ""),
                 "scoring": meta.get("scoring", None),
             }
 
@@ -211,6 +212,7 @@ def load_lab_configs(template_folder):
                 "code_files": code_files,
                 "writeup_files": writeup_files,
                 "instructions": meta.get("instructions", ""),
+                "pre_compile_text": meta.get("pre_compile_text", ""),
                 "scoring": meta.get("scoring", None),
             }
 
@@ -844,6 +846,9 @@ def assignment(assignment_id):
     instructions_raw = lab.get("instructions", "")
     instructions_html = md_lib.markdown(instructions_raw) if instructions_raw else ""
 
+    pre_compile_raw = lab.get("pre_compile_text", "")
+    pre_compile_html = md_lib.markdown(pre_compile_raw) if pre_compile_raw else ""
+
     compile_state = get_compile_status(student_folder, lab)
     scoring = lab.get("scoring") or {}
     lab_type = lab.get("type", "embedded_c")
@@ -875,6 +880,7 @@ def assignment(assignment_id):
             pro_modified=file_status["pro"].get("modified", ""),
             pcb_results=pcb_results,
             instructions=instructions_html,
+            pre_compile_text=pre_compile_html,
             compile_state=compile_state,
             scoring=scoring,
             compile_available=compile_queue.is_available(),
@@ -893,6 +899,7 @@ def assignment(assignment_id):
             extra_files=file_status["extra_files"],
             writeup_status=file_status["writeup_files"],
             instructions=instructions_html,
+            pre_compile_text=pre_compile_html,
             compile_state=compile_state,
             scoring=scoring,
             compile_available=compile_queue.is_available(),

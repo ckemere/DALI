@@ -372,7 +372,16 @@
             <p style="margin-bottom: 15px; color: #666;">
                 Test your code compiles before submitting.
             </p>
-
+            
+            <!-- ============================================================ -->
+            <!-- Pre-Compile Instructions (optional, from lab.yaml)           -->
+            <!-- ============================================================ -->
+            {% if pre_compile_text %}
+            <div class="instructions">
+                {{ pre_compile_text|safe }}
+            </div>
+            {% endif %}
+            
             {% if compile_available %}
             <div id="compile-section">
                 <button id="compile-btn" class="btn btn-compile">🔨 Test Compilation</button>

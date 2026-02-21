@@ -1,5 +1,11 @@
 display_name: "Lab 5"
 canvas_assignment_id: "506850"
+instructions: |
+  Upload your final code for the Lab 5 assignment. Details are given at 
+  [https://elec327.github.io/lab5](https://elec327.github.io/lab5).
+pre_compile_text: |
+  Keep an eye on the compiation output. While you can submit code that
+  does not compile, you will receive only limited partial credit.
 scoring:
   submit_score: 25
   compile_success_score: 50
