@@ -6,3 +6,4 @@ pyyaml
 markdown
 gevent
 locust
+python-cas
