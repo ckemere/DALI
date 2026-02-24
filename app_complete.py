@@ -22,6 +22,8 @@ from urllib.parse import urlparse
 
 from cas import CASClient
 
+from datetime import timedelta # for ticket timeout
+
 from compile_queue import CompilationQueue
 from pcb_makefile_generator import create_makefile_for_pcb  # NEW: PCB support
 
@@ -122,6 +124,8 @@ app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
+
+app.permanent_session_lifetime = timedelta(hours=2)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -777,6 +781,7 @@ def canvas_api_request(endpoint, method="GET", data=None, files=None):
 
 def _login_student(student, auth_method="cas"):
     """Shared session setup for both CAS and password login."""
+    session.permanent = True
     session["student_id"] = student["canvas_id"]
     session["student_name"] = student["name"]
     session["netid"] = student["netid"]
