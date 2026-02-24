@@ -3,13 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Lab Submission</title>
+    <title>DALI — Log In</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -18,40 +14,130 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
         }
         
         .login-container {
             background: white;
+            padding: 40px;
             border-radius: 12px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            padding: 40px;
-            max-width: 400px;
             width: 100%;
+            max-width: 420px;
         }
         
         h1 {
-            color: #333;
-            margin-bottom: 10px;
             font-size: 28px;
+            color: #333;
+            text-align: center;
+            margin-bottom: 8px;
         }
         
         .subtitle {
+            text-align: center;
             color: #666;
-            margin-bottom: 30px;
+            margin-bottom: 24px;
             font-size: 14px;
+        }
+        
+        .flash-message {
+            margin-bottom: 20px;
+            padding: 12px;
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        
+        /* ---- CAS button (primary) ---- */
+        .cas-button {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            text-align: center;
+            text-decoration: none;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .cas-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .cas-button:active {
+            transform: translateY(0);
+        }
+        
+        .cas-note {
+            text-align: center;
+            font-size: 12px;
+            color: #888;
+            margin-top: 10px;
+        }
+        
+        /* ---- Divider ---- */
+        .divider {
+            display: flex;
+            align-items: center;
+            margin: 28px 0;
+            color: #aaa;
+            font-size: 13px;
+        }
+        
+        .divider::before,
+        .divider::after {
+            content: "";
+            flex: 1;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .divider span {
+            padding: 0 12px;
+        }
+        
+        /* ---- Password fallback (collapsed by default) ---- */
+        .fallback-toggle {
+            display: block;
+            width: 100%;
+            text-align: center;
+            font-size: 13px;
+            color: #667eea;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 8px;
+        }
+        
+        .fallback-toggle:hover {
+            text-decoration: underline;
+        }
+        
+        .fallback-form {
+            display: none;
+            margin-top: 16px;
+        }
+        
+        .fallback-form.open {
+            display: block;
         }
         
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 16px;
         }
         
-        label {
+        .form-group label {
             display: block;
-            color: #333;
-            font-weight: 600;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             font-size: 14px;
+            color: #444;
+            font-weight: 500;
         }
         
         input[type="text"],
@@ -70,42 +156,21 @@
             border-color: #667eea;
         }
         
-        .help-text {
-            font-size: 12px;
-            color: #666;
-            margin-top: 5px;
-        }
-        
-        button {
+        .fallback-submit {
             width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-        }
-        
-        button:active {
-            transform: translateY(0);
-        }
-        
-        .flash-message {
-            margin-bottom: 20px;
             padding: 12px;
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            background: #f0f0f0;
+            color: #444;
+            border: 1px solid #ddd;
             border-radius: 6px;
             font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .fallback-submit:hover {
+            background: #e4e4e4;
         }
         
         .note {
@@ -132,36 +197,48 @@
         {% endif %}
         {% endwith %}
         
-        <form method="POST" action="/login">
-            <div class="form-group">
-                <label for="netid">NetID</label>
-                <input type="text" 
-                       id="netid" 
-                       name="netid" 
-                       required 
-                       autofocus
-                       autocapitalize="none"
-                       autocomplete="username"
-                       placeholder="e.g., ts1000">
-            </div>
-            
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" 
-                       id="password" 
-                       name="password" 
-                       required
-                       autocomplete="current-password"
-                       placeholder="Enter your lab password">
-            </div>
-            
-            <button type="submit">Log In</button>
-        </form>
+        <!-- Primary: Rice CAS Login -->
+        <a href="/login/cas" class="cas-button">Log in with Rice NetID</a>
+        <p class="cas-note">You'll be redirected to Rice's secure login page</p>
         
-        <div class="note">
-            Your lab password was provided to you separately and is
-            <strong>not</strong> your university password.
-            Contact your instructor if you need help logging in.
+        <!-- Divider -->
+        <div class="divider"><span>or</span></div>
+        
+        <!-- Fallback: password login (collapsed) -->
+        <button class="fallback-toggle" onclick="document.querySelector('.fallback-form').classList.toggle('open')">
+            Use lab password instead
+        </button>
+        
+        <div class="fallback-form">
+            <form method="POST" action="/login/password">
+                <div class="form-group">
+                    <label for="netid">NetID</label>
+                    <input type="text" 
+                           id="netid" 
+                           name="netid" 
+                           required 
+                           autocapitalize="none"
+                           autocomplete="username"
+                           placeholder="e.g., ts1000">
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Lab Password</label>
+                    <input type="password" 
+                           id="password" 
+                           name="password" 
+                           required
+                           autocomplete="current-password"
+                           placeholder="Enter your lab password">
+                </div>
+                
+                <button type="submit" class="fallback-submit">Log In</button>
+            </form>
+            
+            <div class="note">
+                Lab passwords are for backup access only.
+                Contact your instructor if you need one.
+            </div>
         </div>
     </div>
 </body>

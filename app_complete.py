@@ -20,6 +20,8 @@ import markdown as md_lib
 
 from urllib.parse import urlparse
 
+from cas import CASClient
+
 from compile_queue import CompilationQueue
 from pcb_makefile_generator import create_makefile_for_pcb  # NEW: PCB support
 
@@ -37,6 +39,16 @@ FLASK_SECRET_KEY = require_env("FLASK_SECRET_KEY")
 CANVAS_API_TOKEN = require_env("CANVAS_API_TOKEN")
 COURSE_ID = require_env("COURSE_ID")
 ADMIN_PASSWORD = require_env("ADMIN_PASSWORD")
+
+# CAS Authentication (primary method)
+CAS_SERVER_URL = os.environ.get("CAS_SERVER_URL", "https://idp.rice.edu/idp/profile/cas/")
+CAS_SERVICE_URL = os.environ.get("CAS_SERVICE_URL", "https://dali.rice.edu/cas/callback")
+
+cas_client = CASClient(
+    version=2,
+    server_url=CAS_SERVER_URL,
+    service_url=CAS_SERVICE_URL,
+)
 
 CANVAS_BASE_URL = os.environ.get("CANVAS_BASE_URL", "https://canvas.rice.edu")
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
@@ -763,35 +775,84 @@ def canvas_api_request(endpoint, method="GET", data=None, files=None):
 # ROUTES – AUTH
 # =============================================================================
 
-@app.route("/login", methods=["GET", "POST"])
+def _login_student(student, auth_method="cas"):
+    """Shared session setup for both CAS and password login."""
+    session["student_id"] = student["canvas_id"]
+    session["student_name"] = student["name"]
+    session["netid"] = student["netid"]
+    session["auth_method"] = auth_method
+    logging.info("Login (%s): %s (%s)", auth_method, student["netid"], student["name"])
+
+
+@app.route("/login")
 def login():
-    if request.method == "POST":
-        netid = request.form.get("netid", "")
-        password = request.form.get("password", "")
-
-        student = authenticate_student(netid, password)
-        if student:
-            session["student_id"] = student["canvas_id"]
-            session["student_name"] = student["name"]
-            session["netid"] = student["netid"]
-            session["_pw_fp"] = hashlib.sha256(
-                student["password"].encode()
-            ).hexdigest()[:16]
-            logging.info("Login: %s (%s)", student["netid"], student["name"])
-            return redirect(url_for("home"))
-
-        flash("Invalid NetID or password.")
+    """Login page — CAS button + optional password form."""
     return render_template("login_api.html")
+
+
+@app.route("/login/cas")
+def login_cas():
+    """Redirect to Rice CAS for authentication."""
+    return redirect(cas_client.get_login_url())
+
+
+@app.route("/cas/callback")
+def cas_callback():
+    """Handle return from CAS with a ticket."""
+    ticket = request.args.get("ticket")
+    if not ticket:
+        flash("CAS authentication failed — no ticket received.")
+        return redirect(url_for("login"))
+
+    user, attributes, _ = cas_client.verify_ticket(ticket)
+
+    if not user:
+        flash("CAS ticket validation failed. Try again or use your lab password.")
+        return redirect(url_for("login"))
+
+    netid = user.strip().lower()
+    student = STUDENT_ROSTER.get(netid)
+
+    if not student:
+        flash(f"NetID '{netid}' is not enrolled in this course.")
+        return redirect(url_for("login"))
+
+    _login_student(student, auth_method="cas")
+    return redirect(url_for("home"))
+
+
+@app.route("/login/password", methods=["POST"])
+def login_password():
+    """Fallback: authenticate with roster password."""
+    netid = request.form.get("netid", "")
+    password = request.form.get("password", "")
+
+    student = authenticate_student(netid, password)
+    if student:
+        _login_student(student, auth_method="password")
+        return redirect(url_for("home"))
+
+    flash("Invalid NetID or password.")
+    return redirect(url_for("login"))
+
 
 @app.route("/logout")
 def logout():
+    auth_method = session.get("auth_method", "password")
     session.clear()
+    if auth_method == "cas":
+        # Log out of CAS too so they don't auto-re-login
+        return redirect(cas_client.get_logout_url(url_for("login", _external=True)))
     return redirect(url_for("login"))
+
 
 @app.before_request
 def validate_session():
-    """Check that the logged-in student still has valid credentials."""
-    if request.endpoint in ("login", "logout", "health", "admin_login", "static", None):
+    """Check that the logged-in student is still in the roster."""
+    if request.endpoint in (
+        "login", "login_cas", "cas_callback", "login_password",
+        "logout", "health", "admin_login", "static", None
+    ):
         return
 
     netid = session.get("netid")
@@ -804,11 +865,6 @@ def validate_session():
         flash("Your session has expired. Please log in again.")
         return redirect(url_for("login"))
 
-    current_fp = hashlib.sha256(student["password"].encode()).hexdigest()[:16]
-    if session.get("_pw_fp") != current_fp:
-        session.clear()
-        flash("Your password has been changed. Please log in again.")
-        return redirect(url_for("login"))
 
 # =============================================================================
 # ROUTES – MAIN
