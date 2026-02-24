@@ -820,6 +820,7 @@ def cas_callback():
 
     if not student:
         flash(f"NetID '{netid}' is not enrolled in this course.")
+        session["cas_not_enrolled"] = True        
         return redirect(url_for("login"))
 
     _login_student(student, auth_method="cas")
