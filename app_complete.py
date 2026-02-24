@@ -820,9 +820,8 @@ def cas_callback():
 
     if not student:
         flash(f"NetID '{netid}' is not enrolled in this course.")
-        # Log them out of CAS so they don't loop
-        return redirect(cas_client.get_logout_url(url_for("login", _external=True)))
-    
+        return redirect(url_for("login"))
+
     _login_student(student, auth_method="cas")
     return redirect(url_for("home"))
 

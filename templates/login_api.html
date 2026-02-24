@@ -196,6 +196,17 @@
         {% endfor %}
         {% endif %}
         {% endwith %}
+
+        {% if session.get('cas_not_enrolled') %}
+        <div class="note" style="margin-bottom: 20px;">
+            Logged in to Rice CAS but not enrolled in this course.
+            <a href="https://idp.rice.edu/idp/profile/cas/logout?service={{ url_for('login', _external=True) }}"
+            style="color: #667eea; font-weight: 500;">
+                Log out of Rice CAS
+            </a>
+            to try a different NetID.
+        </div>
+        {% endif %}
         
         <!-- Primary: Rice CAS Login -->
         <a href="/login/cas" class="cas-button">Log in with Rice NetID</a>
