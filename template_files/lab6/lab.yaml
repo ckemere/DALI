@@ -1,0 +1,19 @@
+display_name: "Lab 6"
+canvas_assignment_id: "508468"
+instructions: |
+  Upload your final code for the Lab 6 assignment. Details are given at 
+  [https://elec327.github.io/lab6](https://elec327.github.io/lab6). Please
+  note that it is highly expected that you will have additional files containing
+  the code for your state machine. Use the "Additional Files" option below
+  to add code and header files that are not part of the template.
+  **Note:** Your writeup should articulate how you have fully completed the elements
+  described in the rubric on the website. 
+pre_compile_text: |
+  Keep an eye on the compiation output. While you can submit code that
+  does not compile, you will receive only limited partial credit.
+scoring:
+  submit_score: 25
+  compile_success_score: 50
+writeup_files:
+  - writeup.txt
+  - writeup.pdf
