@@ -578,7 +578,8 @@ def _img_tag(png_path: Optional[Path], alt: str) -> str:
     data = base64.b64encode(png_path.read_bytes()).decode("ascii")
     return (
         f'<img src="data:image/png;base64,{data}" '
-        f'alt="{html_escape(alt)}" style="max-width:300px; max-height:300px;">'
+        f'alt="{html_escape(alt)}" style="max-width:300px; max-height:300px; '
+        f'background:#444; padding:4px; border-radius:4px;">'
     )
 
 
