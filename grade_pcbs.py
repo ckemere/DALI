@@ -479,16 +479,26 @@ def grade_one(
         result.error = "no .kicad_pcb found"
         return result
 
-    # --- Locate DALI-generated PNG previews ---
+    # --- Locate PNG previews ---
+    # Canvas zips from DALI contain previews either in a _pcb_results/
+    # subdirectory or flat alongside the .kicad_pcb file.
     student_dir = work_dir / sub.net_id
+    preview_search_dirs = []
+    # Check _pcb_results subdirectories first
     for results_dir in student_dir.rglob("_pcb_results"):
-        top = results_dir / "preview_top.png"
-        bottom = results_dir / "preview_bottom.png"
-        if top.exists():
-            result.preview_top = top
-        if bottom.exists():
-            result.preview_bottom = bottom
-        break
+        preview_search_dirs.append(results_dir)
+    # Also search anywhere in the extracted tree (flat layout from Canvas)
+    preview_search_dirs.append(student_dir)
+
+    for search_dir in preview_search_dirs:
+        for png in search_dir.rglob("preview_top.png"):
+            if result.preview_top is None:
+                result.preview_top = png
+        for png in search_dir.rglob("preview_bottom.png"):
+            if result.preview_bottom is None:
+                result.preview_bottom = png
+        if result.preview_top and result.preview_bottom:
+            break
 
     # --- Parse PCB for dimensions and text ---
     try:
