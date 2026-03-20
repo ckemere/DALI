@@ -22,6 +22,7 @@ Requirements:
 """
 
 import argparse
+import base64
 import csv
 import json
 import math
@@ -33,6 +34,7 @@ import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
+from html import escape as html_escape
 from pathlib import Path
 from typing import Optional
 
@@ -455,6 +457,8 @@ class GradeResult:
     height_mm: float = 0.0
     area_mm2: float = 0.0
     copper_texts: str = ""
+    preview_top: Optional[Path] = None
+    preview_bottom: Optional[Path] = None
     error: str = ""
 
 
@@ -474,6 +478,17 @@ def grade_one(
     if pcb_path is None:
         result.error = "no .kicad_pcb found"
         return result
+
+    # --- Locate DALI-generated PNG previews ---
+    student_dir = work_dir / sub.net_id
+    for results_dir in student_dir.rglob("_pcb_results"):
+        top = results_dir / "preview_top.png"
+        bottom = results_dir / "preview_bottom.png"
+        if top.exists():
+            result.preview_top = top
+        if bottom.exists():
+            result.preview_bottom = bottom
+        break
 
     # --- Parse PCB for dimensions and text ---
     try:
@@ -544,6 +559,98 @@ def load_dru_files(template_dir: Path) -> list[dict]:
         sys.exit("ERROR: No dru_files defined in lab.yaml")
 
     return dru_files
+
+
+def _img_tag(png_path: Optional[Path], alt: str) -> str:
+    """Return an <img> tag with base64-encoded PNG, or a placeholder."""
+    if png_path is None or not png_path.exists():
+        return "<em>no preview</em>"
+    data = base64.b64encode(png_path.read_bytes()).decode("ascii")
+    return (
+        f'<img src="data:image/png;base64,{data}" '
+        f'alt="{html_escape(alt)}" style="max-width:300px; max-height:300px;">'
+    )
+
+
+def write_html_report(results: list[GradeResult], html_path: Path, no_drc: bool):
+    """Write an HTML report with the grading table and embedded PCB previews."""
+    rows = []
+    for r in results:
+        late_str = "LATE" if r.late else ""
+        dims = (
+            f"{r.width_mm:.1f} &times; {r.height_mm:.1f} mm"
+            if r.width_mm > 0 else ""
+        )
+
+        drc_cells = ""
+        if not no_drc:
+            def drc_cell(passed, errors):
+                if passed is None:
+                    return "<td></td>"
+                cls = "pass" if passed else "fail"
+                label = "PASS" if passed else f"FAIL ({errors})"
+                return f'<td class="{cls}">{label}</td>'
+            drc_cells = drc_cell(r.weak_drc_pass, r.weak_drc_errors)
+            drc_cells += drc_cell(r.strong_drc_pass, r.strong_drc_errors)
+
+        top_img = _img_tag(r.preview_top, f"{r.net_id} top")
+        bot_img = _img_tag(r.preview_bottom, f"{r.net_id} bottom")
+
+        rows.append(
+            f"<tr>"
+            f"<td>{html_escape(r.student_name)}</td>"
+            f"<td>{html_escape(r.net_id)}</td>"
+            f"<td>{late_str}</td>"
+            f"{drc_cells}"
+            f"<td>{dims}</td>"
+            f"<td>{html_escape(r.copper_texts)}</td>"
+            f"<td>{html_escape(r.error)}</td>"
+            f"<td>{top_img}</td>"
+            f"<td>{bot_img}</td>"
+            f"</tr>"
+        )
+
+    drc_headers = ""
+    if not no_drc:
+        drc_headers = "<th>Weak DRC</th><th>Strong DRC</th>"
+
+    html = f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PCB Grading Report</title>
+<style>
+  body {{ font-family: sans-serif; margin: 1em; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  th, td {{ border: 1px solid #ccc; padding: 6px 8px; text-align: left; vertical-align: top; }}
+  th {{ background: #f0f0f0; position: sticky; top: 0; }}
+  tr:nth-child(even) {{ background: #fafafa; }}
+  .pass {{ color: #1a7f37; font-weight: bold; }}
+  .fail {{ color: #cf222e; font-weight: bold; }}
+  img {{ display: block; }}
+</style>
+</head>
+<body>
+<h1>PCB Grading Report</h1>
+<p>{len(results)} students</p>
+<table>
+<thead>
+<tr>
+  <th>Student</th><th>Net ID</th><th>Late</th>
+  {drc_headers}
+  <th>Dimensions</th><th>Copper Text</th><th>Error</th>
+  <th>Preview (Top)</th><th>Preview (Bottom)</th>
+</tr>
+</thead>
+<tbody>
+{"".join(rows)}
+</tbody>
+</table>
+</body>
+</html>"""
+
+    html_path.write_text(html, encoding="utf-8")
 
 
 def main():
@@ -650,7 +757,7 @@ def main():
                 r.net_id,
                 r.late,
                 r.weak_drc_pass if r.weak_drc_pass is not None else "",
-                r.strong_drc_errors if r.weak_drc_pass is not None else "",
+                r.weak_drc_errors if r.weak_drc_pass is not None else "",
                 r.strong_drc_pass if r.strong_drc_pass is not None else "",
                 r.strong_drc_errors if r.strong_drc_pass is not None else "",
                 r.width_mm,
@@ -659,6 +766,11 @@ def main():
                 r.copper_texts,
                 r.error,
             ])
+
+    # Write HTML report
+    html_path = args.output.with_suffix(".html")
+    print(f"  Writing HTML report to {html_path}")
+    write_html_report(results, html_path, args.no_drc)
 
     print(f"\nDone! {len(results)} students graded → {args.output}")
 
