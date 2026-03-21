@@ -31,7 +31,9 @@ from makefile_generator import (
     DEVICE_NAME,
 )
 
-TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "template_files", "lab1")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "template_files", "lab1")
+DEFAULT_CCXML = os.path.join(SCRIPT_DIR, "MSPM0G3507.ccxml")
 
 # Files from the template that are needed for building but students
 # don't modify (infrastructure files).
@@ -262,8 +264,8 @@ def main():
         help="Directory containing student submission .zip files"
     )
     parser.add_argument(
-        "--ccxml", required=True,
-        help="Path to the .ccxml target configuration file for DSLite"
+        "--ccxml", default=DEFAULT_CCXML,
+        help="Path to the .ccxml target configuration file for DSLite (default: MSPM0G3507.ccxml)"
     )
     parser.add_argument(
         "--results-csv",
