@@ -90,11 +90,85 @@ class CalibrationGUI:
         self.threshold = DEFAULT_THRESHOLD
         self.sample_radius = sample_radius
         self.show_threshold = False
+        self.show_brightness = True
         self.frozen_frame = None
         # Drag state: (group_key, index) of the point being dragged
         self._dragging = None
+        # Brightness tracking: {(group_key, index): [min, max, count, sum]}
+        self._brightness_stats = {}
 
     # ── helpers ──────────────────────────────────────────────────────
+
+    def _brightness(self, gray, x, y):
+        """Mean brightness in a square patch around (x, y)."""
+        r = self.sample_radius
+        h, w = gray.shape
+        y1, y2 = max(0, y - r), min(h, y + r)
+        x1, x2 = max(0, x - r), min(w, x + r)
+        roi = gray[y1:y2, x1:x2]
+        if roi.size == 0:
+            return 0.0
+        return float(np.mean(roi))
+
+    def _update_brightness_stats(self, gray):
+        """Sample brightness at every marked position and update running stats."""
+        for key, _, _ in LED_GROUPS:
+            for i, pos in enumerate(self.positions[key]):
+                bri = self._brightness(gray, pos["x"], pos["y"])
+                stat_key = (key, i)
+                if stat_key not in self._brightness_stats:
+                    self._brightness_stats[stat_key] = [bri, bri, 1, bri]
+                else:
+                    s = self._brightness_stats[stat_key]
+                    s[0] = min(s[0], bri)
+                    s[1] = max(s[1], bri)
+                    s[2] += 1
+                    s[3] += bri
+
+    def _reset_brightness_stats(self):
+        """Clear accumulated stats (e.g. after changing LED state)."""
+        self._brightness_stats.clear()
+
+    def _print_brightness_summary(self):
+        """Print per-LED brightness stats and suggest a threshold."""
+        if not self._brightness_stats:
+            print("  No brightness data yet. Mark LEDs and wait a moment.")
+            return
+        print("\n  === Brightness Summary ===")
+        print(f"  {'Group':<15} {'LED':>3}  {'Min':>5}  {'Max':>5}  {'Avg':>5}")
+        print(f"  {'-'*45}")
+        all_mins = []
+        all_maxs = []
+        for key, label, _ in LED_GROUPS:
+            for i in range(len(self.positions[key])):
+                stat_key = (key, i)
+                if stat_key in self._brightness_stats:
+                    s = self._brightness_stats[stat_key]
+                    mn, mx, cnt, total = s
+                    avg = total / cnt
+                    short_label = label.split("(")[0].strip()
+                    print(f"  {short_label:<15} {i+1:>3}  {mn:5.0f}  {mx:5.0f}  {avg:5.0f}")
+                    all_mins.append(mn)
+                    all_maxs.append(mx)
+        if all_mins:
+            global_min = min(all_mins)
+            global_max = max(all_maxs)
+            # If there's a gap between the min-of-maxes and max-of-mins,
+            # that's the on/off boundary
+            max_of_mins = max(all_mins)
+            min_of_maxes = min(all_maxs)
+            print(f"\n  Overall range: {global_min:.0f} - {global_max:.0f}")
+            print(f"  Highest 'min': {max_of_mins:.0f}  (dimmest an LED ever was)")
+            print(f"  Lowest 'max':  {min_of_maxes:.0f}  (brightest the dimmest LED got)")
+            if max_of_mins < min_of_maxes:
+                suggested = int((max_of_mins + min_of_maxes) / 2)
+                print(f"  Suggested threshold: {suggested}  "
+                      f"(midpoint of {max_of_mins:.0f}..{min_of_maxes:.0f} gap)")
+            else:
+                print(f"  No clear gap — try pressing 'r' to reset, then "
+                      f"observe with some LEDs ON and some OFF")
+            print(f"  Current threshold: {self.threshold}")
+        print()
 
     def _group(self):
         return LED_GROUPS[self.group_idx]
@@ -183,27 +257,52 @@ class CalibrationGUI:
 
     def _draw(self, frame):
         display = frame.copy()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         if self.show_threshold:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             _, mask = cv2.threshold(gray, self.threshold, 255,
                                     cv2.THRESH_BINARY)
             display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
-        # Draw marked positions
+        # Update brightness stats from this frame
+        self._update_brightness_stats(gray)
+
+        # Draw marked positions with live brightness
+        on_count = 0
+        off_count = 0
+        all_brightness = []
         for gi, (key, _, _) in enumerate(LED_GROUPS):
             color = self.COLORS[gi % len(self.COLORS)]
             for i, pos in enumerate(self.positions[key]):
+                bri = self._brightness(gray, pos["x"], pos["y"])
+                is_on = bri > self.threshold
+                all_brightness.append(bri)
+                if key != "debug_led":
+                    if is_on:
+                        on_count += 1
+                    else:
+                        off_count += 1
+
                 # Highlight the point being dragged
                 is_dragged = (self._dragging is not None
                               and self._dragging == (key, i))
                 thickness = 3 if is_dragged else 2
-                draw_color = (255, 255, 255) if is_dragged else color
+                if is_dragged:
+                    draw_color = (255, 255, 255)
+                elif is_on:
+                    draw_color = (0, 255, 255)   # yellow = ON
+                else:
+                    draw_color = color           # group color = OFF
                 cv2.circle(display, (pos["x"], pos["y"]),
                            self.sample_radius, draw_color, thickness)
-                cv2.putText(display, str(i + 1),
+
+                # Show LED index and brightness value
+                label_text = str(i + 1)
+                if self.show_brightness:
+                    label_text = f"{int(bri)}"
+                cv2.putText(display, label_text,
                             (pos["x"] - 8, pos["y"] + 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, draw_color, 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, draw_color, 1)
 
         # Instructions
         key, label, count = self._group()
@@ -217,12 +316,23 @@ class CalibrationGUI:
 
         cv2.putText(display, text, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
+        # Live brightness summary bar
+        if all_brightness:
+            bmin, bmax = int(min(all_brightness)), int(max(all_brightness))
+            stats_text = (f"thr={self.threshold}  ON={on_count} OFF={off_count}  "
+                          f"range={bmin}-{bmax}")
+        else:
+            stats_text = f"thr={self.threshold}"
+        cv2.putText(display, stats_text, (10, 55),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
+
         cv2.putText(
             display,
-            f"thr={self.threshold} [t]oggle [+/-]adj  "
+            f"[t]hreshold [+/-]adj [b]ri-stats [r]eset-stats  "
             f"drag=move  right-click=del  [u]ndo [f]reeze [s]ave [q]uit",
             (10, display.shape[0] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1,
+            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1,
         )
         return display
 
@@ -287,6 +397,11 @@ class CalibrationGUI:
                 else:
                     self.frozen_frame = None
                     print("  Frame unfrozen")
+            elif key == ord("b"):
+                self._print_brightness_summary()
+            elif key == ord("r"):
+                self._reset_brightness_stats()
+                print("  Brightness stats reset")
             elif key == ord("s"):
                 if not self._all_done():
                     print("  Not all LEDs marked yet!")
