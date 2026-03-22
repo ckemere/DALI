@@ -166,8 +166,14 @@ class CalibrationGUI:
 
     def run(self):
         """Run the calibration GUI.  Returns a calibration dict or None."""
-        win = "Lab 1 – LED Calibration"
-        cv2.namedWindow(win)
+        win = "Lab 1 - LED Calibration"
+        cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
+        # Read and display one frame to force the window to initialize
+        # (required on macOS Qt backend before setMouseCallback works)
+        ret, frame = self.cap.read()
+        if ret:
+            cv2.imshow(win, frame)
+            cv2.waitKey(1)
         cv2.setMouseCallback(win, self._on_click)
 
         _, label, _ = self._group()
