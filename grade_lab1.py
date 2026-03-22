@@ -377,14 +377,209 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
     print(f"\nSummary: {compiled}/{len(results)} compiled, {flashed}/{len(results)} flashed")
 
 
+def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
+                     camera_device=0, video_duration=VIDEO_DURATION,
+                     compile_only=False, keep_build=False):
+    """
+    Process one student zip end-to-end with verbose output at every step.
+    Useful for debugging the pipeline before running the full batch.
+
+    Args:
+        zip_path:          Path to the student .zip
+        ccxml_path:        CCXML board config for DSLite
+        calibration_path:  Calibration JSON (enables video analysis)
+        camera_device:     Camera index for ffmpeg
+        video_duration:    Seconds to record
+        compile_only:      Stop after compilation
+        keep_build:        Keep the build directory on disk for inspection
+
+    Returns:
+        dict with results from each pipeline stage
+    """
+    result = {"zip": zip_path, "student": student_name_from_zip(os.path.basename(zip_path))}
+    student = result["student"]
+    print(f"=== Single-zip mode: {student} ===\n")
+
+    # ── 1. Toolchain ──────────────────────────────────────────────
+    print("Step 1/5: Verify toolchain")
+    ok, msg = verify_toolchain()
+    if not ok:
+        print(f"  FAIL: {msg}")
+        result["toolchain"] = msg
+        return result
+    print(f"  OK: {msg}")
+    result["toolchain"] = "ok"
+
+    dslite_path = None
+    if not compile_only:
+        dslite_path = find_dslite()
+        print(f"  DSLite: {dslite_path or 'NOT FOUND'}")
+
+    # ── 2. Extract ────────────────────────────────────────────────
+    print("\nStep 2/5: Extract zip")
+    build_dir = tempfile.mkdtemp(prefix=f"grade_{student}_")
+    print(f"  Build dir: {build_dir}")
+    try:
+        extracted = extract_submission(zip_path, build_dir)
+        print(f"  Extracted {len(extracted)} files:")
+        for f in sorted(extracted):
+            print(f"    {f}")
+    except zipfile.BadZipFile:
+        print("  FAIL: Bad zip file")
+        result["extract"] = "bad_zip"
+        if not keep_build:
+            shutil.rmtree(build_dir, ignore_errors=True)
+        return result
+
+    ok, err = ensure_infrastructure(build_dir)
+    if not ok:
+        print(f"  FAIL: {err}")
+        result["extract"] = err
+        if not keep_build:
+            shutil.rmtree(build_dir, ignore_errors=True)
+        return result
+    print("  Infrastructure files: OK")
+    result["extract"] = "ok"
+    result["build_dir"] = build_dir
+
+    # ── 3. Compile ────────────────────────────────────────────────
+    print("\nStep 3/5: Compile")
+    try:
+        success, stdout, stderr = compile_submission(build_dir)
+    except subprocess.TimeoutExpired:
+        print("  FAIL: Compilation timed out (60 s)")
+        result["compile"] = "timeout"
+        if not keep_build:
+            shutil.rmtree(build_dir, ignore_errors=True)
+        return result
+
+    result["compile"] = "ok" if success else "fail"
+    if success:
+        out_file = os.path.join(build_dir, "Lab_1.out")
+        size = os.path.getsize(out_file) if os.path.isfile(out_file) else 0
+        print(f"  PASS  (Lab_1.out = {size:,} bytes)")
+    else:
+        print(f"  FAIL")
+        print(f"  --- stderr ---")
+        for line in stderr.strip().split("\n")[:20]:
+            print(f"  {line}")
+        print(f"  --- end ---")
+        if not keep_build:
+            shutil.rmtree(build_dir, ignore_errors=True)
+        return result
+
+    if compile_only:
+        print(f"\n  --compile-only: stopping here.")
+        print(f"  Build dir: {build_dir}")
+        return result
+
+    # ── 4. Flash ──────────────────────────────────────────────────
+    print("\nStep 4/5: Flash firmware")
+    if not dslite_path:
+        print("  SKIP: DSLite not found (set DSLITE_PATH)")
+        result["flash"] = "skipped"
+        if not keep_build:
+            shutil.rmtree(build_dir, ignore_errors=True)
+        return result
+
+    # Start recording BEFORE flashing so we capture the debug LED
+    rec_proc = None
+    video_path = None
+    video_dir = os.path.dirname(os.path.abspath(zip_path))
+    video_path = os.path.join(video_dir, f"{student}.mp4")
+    print(f"  Starting {video_duration}s recording -> {video_path}")
+    rec_proc = start_recording(video_path, video_duration, camera_device)
+
+    try:
+        f_ok, f_out, f_err = flash_firmware(build_dir, dslite_path, ccxml_path)
+    except subprocess.TimeoutExpired:
+        f_ok, f_err = False, "Flash timed out"
+
+    result["flash"] = "ok" if f_ok else "fail"
+    if f_ok:
+        print(f"  PASS")
+    else:
+        print(f"  FAIL: {f_err.strip().split(chr(10))[0]}")
+
+    # Wait for recording
+    if rec_proc is not None:
+        print(f"  Waiting for video ({video_duration}s)...")
+        v_ok, v_err = finish_recording(rec_proc, video_duration)
+        if v_ok:
+            fsize = os.path.getsize(video_path)
+            print(f"  Video saved: {video_path} ({fsize:,} bytes)")
+            result["video"] = video_path
+        else:
+            print(f"  Video FAILED: {v_err}")
+            result["video"] = None
+
+    if not keep_build:
+        shutil.rmtree(build_dir, ignore_errors=True)
+
+    # ── 5. Analyze ────────────────────────────────────────────────
+    print("\nStep 5/5: Video analysis")
+    if not result.get("video"):
+        print("  SKIP: no video recorded")
+        result["analysis"] = "skipped"
+        return result
+
+    if not calibration_path:
+        print("  SKIP: no --calibration provided")
+        result["analysis"] = "skipped"
+        return result
+
+    if VideoAnalyzer is None:
+        print("  SKIP: opencv-python not installed")
+        result["analysis"] = "skipped"
+        return result
+
+    try:
+        analyzer = VideoAnalyzer(calibration_path)
+        timeline = analyzer.extract_timeline(result["video"])
+        scores, changes = analyzer.score(timeline)
+        result["scores"] = scores
+        result["analysis"] = "ok"
+
+        print(f"  t0 offset:   {scores.get('t0_offset', '?')}")
+        print(f"  LEDs off:    {scores.get('leds_start_off', '?')}")
+        print(f"  Activated:   {scores.get('leds_activated', '?')}")
+        print(f"  Avg on:      {scores.get('avg_leds_on', '?')}")
+        print(f"  Two hands:   {scores.get('two_hands', '?')}")
+        print(f"  Timing:      {scores.get('timing_1hz', '?')} "
+              f"({scores.get('timing_interval', '')})")
+        print(f"  Loop:        {scores.get('infinite_loop', '?')}")
+        print(f"  Wrap:        {scores.get('sequence_wrap', '?')}")
+        print(f"  Changes:     {scores.get('total_state_changes', '?')}")
+
+        # Save change log next to video
+        changes_path = result["video"].replace(".mp4", "_changes.json")
+        with open(changes_path, "w") as cf:
+            json.dump(changes, cf, indent=1)
+        print(f"\n  Change log: {changes_path}")
+    except Exception as e:
+        print(f"  FAILED: {e}")
+        result["analysis"] = str(e)
+
+    print(f"\n=== Done: {student} ===")
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Lab 1 Grading Script - compile and flash student submissions"
     )
-    parser.add_argument(
-        "--submissions-dir", required=True,
-        help="Directory containing student submission .zip files"
+
+    # Single-zip mode vs batch mode
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--zip",
+        help="Process a single student .zip (debug mode)"
     )
+    source.add_argument(
+        "--submissions-dir",
+        help="Directory containing student submission .zip files (batch mode)"
+    )
+
     parser.add_argument(
         "--ccxml", default=DEFAULT_CCXML,
         help="Path to the .ccxml target configuration file for DSLite (default: MSPM0G3507.ccxml)"
@@ -410,9 +605,37 @@ def main():
         "--camera", type=int, default=0,
         help="Camera device index for recording (default: 0)"
     )
+    parser.add_argument(
+        "--keep-build", action="store_true",
+        help="Keep temporary build directory (for --zip debugging)"
+    )
 
     args = parser.parse_args()
 
+    # ── Single-zip mode ───────────────────────────────────────────
+    if args.zip:
+        if not os.path.isfile(args.zip):
+            print(f"Error: {args.zip} not found")
+            sys.exit(1)
+        result = grade_single_zip(
+            zip_path=args.zip,
+            ccxml_path=args.ccxml,
+            calibration_path=args.calibration,
+            camera_device=args.camera,
+            video_duration=args.video_duration,
+            compile_only=args.compile_only,
+            keep_build=args.keep_build,
+        )
+        # Print summary as JSON for easy inspection
+        print("\n--- Result summary ---")
+        summary = {k: v for k, v in result.items() if k != "scores"}
+        print(json.dumps(summary, indent=2))
+        if "scores" in result:
+            print("\n--- Scores ---")
+            print(json.dumps(result["scores"], indent=2))
+        sys.exit(0 if result.get("compile") == "ok" else 1)
+
+    # ── Batch mode ────────────────────────────────────────────────
     # Validate submissions directory
     if not os.path.isdir(args.submissions_dir):
         print(f"Error: {args.submissions_dir} is not a directory")
