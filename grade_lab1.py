@@ -34,6 +34,7 @@ from makefile_generator import (
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "template_files", "lab1")
 DEFAULT_CCXML = os.path.join(SCRIPT_DIR, "MSPM0G3507.ccxml")
+VIDEO_DURATION = 10  # seconds to record after flashing
 
 # Files from the template that are needed for building but students
 # don't modify (infrastructure files).
@@ -122,6 +123,39 @@ def flash_firmware(build_dir, dslite_path, ccxml_path):
     return proc.returncode == 0, proc.stdout, proc.stderr
 
 
+def record_video(output_path, duration=VIDEO_DURATION):
+    """
+    Record video from the default camera using ffmpeg.
+    Uses avfoundation on macOS.
+    Returns (success, error_message).
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",  # overwrite
+        "-f", "avfoundation",
+        "-framerate", "30",
+        "-i", "0",  # default video device
+        "-t", str(duration),
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        output_path,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=duration + 15,
+        )
+        if proc.returncode == 0:
+            return True, ""
+        return False, proc.stderr.strip().split("\n")[-1]
+    except FileNotFoundError:
+        return False, "ffmpeg not found in PATH"
+    except subprocess.TimeoutExpired:
+        return False, "Video recording timed out"
+
+
 def student_name_from_zip(zip_name):
     """
     Extract a student identifier from the zip filename.
@@ -135,7 +169,7 @@ def student_name_from_zip(zip_name):
     return base
 
 
-def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True):
+def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True, video_dir=None):
     """
     Main grading loop: iterate over zips, compile, optionally flash.
     """
@@ -163,6 +197,7 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True)
             "compile_errors": "",
             "flash_success": False,
             "flash_errors": "",
+            "video_file": "",
         }
 
         build_dir = tempfile.mkdtemp(prefix=f"grade_{student}_")
@@ -226,9 +261,17 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True)
                         row["flash_errors"] = "Flash timed out"
                         print(f"  Flash: TIMEOUT")
 
-                # Pause after flashing so the grader can observe the board
-                if row["flash_success"]:
-                    input("  >> Press Enter to continue to next student...")
+                # Record video of the board after successful flash
+                if row["flash_success"] and video_dir:
+                    video_file = f"{student}.mp4"
+                    video_path = os.path.join(video_dir, video_file)
+                    print(f"  Recording {VIDEO_DURATION}s video...")
+                    v_ok, v_err = record_video(video_path)
+                    if v_ok:
+                        row["video_file"] = video_file
+                        print(f"  Video: saved to {video_file}")
+                    else:
+                        print(f"  Video: FAILED ({v_err})")
 
         finally:
             shutil.rmtree(build_dir, ignore_errors=True)
@@ -242,6 +285,7 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True)
             "student", "zip_file",
             "compile_success", "compile_errors",
             "flash_success", "flash_errors",
+            "video_file",
         ]
         with open(results_csv, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -276,6 +320,10 @@ def main():
         "--compile-only", action="store_true",
         help="Only compile, do not flash"
     )
+    parser.add_argument(
+        "--video-duration", type=int, default=VIDEO_DURATION,
+        help=f"Seconds of video to record after each flash (default: {VIDEO_DURATION})"
+    )
 
     args = parser.parse_args()
 
@@ -306,6 +354,19 @@ def main():
             print(f"Error: ccxml file not found: {args.ccxml}")
             sys.exit(1)
 
+    # Set up video directory next to the results CSV
+    video_dir = None
+    if not args.compile_only and dslite_path:
+        global VIDEO_DURATION
+        VIDEO_DURATION = args.video_duration
+        results_parent = os.path.dirname(os.path.abspath(args.results_csv))
+        video_dir = os.path.join(results_parent, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+        print(f"Videos: {video_dir} ({VIDEO_DURATION}s each)")
+        # Verify ffmpeg is available
+        if not shutil.which("ffmpeg"):
+            print("Warning: ffmpeg not found in PATH. Video recording will fail.")
+
     print()
     grade_all(
         submissions_dir=args.submissions_dir,
@@ -313,6 +374,7 @@ def main():
         dslite_path=dslite_path,
         results_csv=args.results_csv,
         flash=not args.compile_only,
+        video_dir=video_dir,
     )
 
 
