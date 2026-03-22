@@ -76,6 +76,8 @@ class CalibrationGUI:
         (0, 255, 0),    # green   – inner ring
     ]
 
+    DRAG_THRESHOLD = 20  # pixels – click within this to grab an existing point
+
     def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS):
         self.cap = cv2.VideoCapture(camera_device)
         if not self.cap.isOpened():
@@ -87,6 +89,8 @@ class CalibrationGUI:
         self.sample_radius = sample_radius
         self.show_threshold = False
         self.frozen_frame = None
+        # Drag state: (group_key, index) of the point being dragged
+        self._dragging = None
 
     # ── helpers ──────────────────────────────────────────────────────
 
@@ -99,26 +103,79 @@ class CalibrationGUI:
             for key, _, count in LED_GROUPS
         )
 
+    def _find_nearest(self, x, y):
+        """Find the nearest existing point across all groups.
+        Returns (group_key, index, distance) or None."""
+        best = None
+        for key, _, _ in LED_GROUPS:
+            for i, pos in enumerate(self.positions[key]):
+                d = ((pos["x"] - x) ** 2 + (pos["y"] - y) ** 2) ** 0.5
+                if best is None or d < best[2]:
+                    best = (key, i, d)
+        return best
+
     # ── mouse callback ──────────────────────────────────────────────
 
-    def _on_click(self, event, x, y, flags, param):
-        if event != cv2.EVENT_LBUTTONDOWN:
+    def _on_mouse(self, event, x, y, flags, param):
+        # ── Right-click: delete nearest point ──
+        if event == cv2.EVENT_RBUTTONDOWN:
+            nearest = self._find_nearest(x, y)
+            if nearest and nearest[2] < self.DRAG_THRESHOLD:
+                gkey, idx, _ = nearest
+                removed = self.positions[gkey].pop(idx)
+                # Find the label for this group
+                glabel = next(
+                    lbl for k, lbl, _ in LED_GROUPS if k == gkey
+                )
+                print(f"  Deleted {glabel} LED {idx + 1} "
+                      f"at ({removed['x']}, {removed['y']})")
+                # Reset group_idx to the earliest incomplete group
+                for gi, (k, _, cnt) in enumerate(LED_GROUPS):
+                    if len(self.positions[k]) < cnt:
+                        self.group_idx = gi
+                        break
             return
 
-        key, label, count = self._group()
-        if len(self.positions[key]) >= count:
+        # ── Left-button down: start drag or place new point ──
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # Check if clicking near an existing point → start drag
+            nearest = self._find_nearest(x, y)
+            if nearest and nearest[2] < self.DRAG_THRESHOLD:
+                self._dragging = (nearest[0], nearest[1])
+                return
+
+            # Otherwise place a new point in the current group
+            key, label, count = self._group()
+            if len(self.positions[key]) >= count:
+                return
+            self.positions[key].append({"x": x, "y": y})
+            n = len(self.positions[key])
+            print(f"  {label} LED {n}/{count} at ({x}, {y})")
+
+            if n == count and self.group_idx < len(LED_GROUPS) - 1:
+                self.group_idx += 1
+                _, next_label, _ = self._group()
+                print(f"\nNow mark: {next_label}")
+            elif self._all_done():
+                print("\nAll LEDs marked! Press 's' to save or 'q' to quit.")
             return
 
-        self.positions[key].append({"x": x, "y": y})
-        n = len(self.positions[key])
-        print(f"  {label} LED {n}/{count} at ({x}, {y})")
+        # ── Mouse move while dragging ──
+        if event == cv2.EVENT_MOUSEMOVE and self._dragging is not None:
+            gkey, idx = self._dragging
+            self.positions[gkey][idx] = {"x": x, "y": y}
+            return
 
-        if n == count and self.group_idx < len(LED_GROUPS) - 1:
-            self.group_idx += 1
-            _, next_label, _ = self._group()
-            print(f"\nNow mark: {next_label}")
-        elif self._all_done():
-            print("\nAll LEDs marked! Press 's' to save or 'q' to quit.")
+        # ── Left-button up: stop dragging ──
+        if event == cv2.EVENT_LBUTTONUP and self._dragging is not None:
+            gkey, idx = self._dragging
+            pos = self.positions[gkey][idx]
+            glabel = next(
+                lbl for k, lbl, _ in LED_GROUPS if k == gkey
+            )
+            print(f"  Moved {glabel} LED {idx + 1} to ({pos['x']}, {pos['y']})")
+            self._dragging = None
+            return
 
     # ── overlay ─────────────────────────────────────────────────────
 
@@ -135,11 +192,16 @@ class CalibrationGUI:
         for gi, (key, _, _) in enumerate(LED_GROUPS):
             color = self.COLORS[gi % len(self.COLORS)]
             for i, pos in enumerate(self.positions[key]):
+                # Highlight the point being dragged
+                is_dragged = (self._dragging is not None
+                              and self._dragging == (key, i))
+                thickness = 3 if is_dragged else 2
+                draw_color = (255, 255, 255) if is_dragged else color
                 cv2.circle(display, (pos["x"], pos["y"]),
-                           self.sample_radius, color, 2)
+                           self.sample_radius, draw_color, thickness)
                 cv2.putText(display, str(i + 1),
                             (pos["x"] - 8, pos["y"] + 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, draw_color, 2)
 
         # Instructions
         key, label, count = self._group()
@@ -155,8 +217,8 @@ class CalibrationGUI:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         cv2.putText(
             display,
-            f"threshold={self.threshold}  [t]oggle  [+/-]adjust  "
-            f"[f]reeze  [u]ndo  [s]ave  [q]uit",
+            f"thr={self.threshold} [t]oggle [+/-]adj  "
+            f"drag=move  right-click=del  [u]ndo [f]reeze [s]ave [q]uit",
             (10, display.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1,
         )
@@ -174,11 +236,12 @@ class CalibrationGUI:
         if ret:
             cv2.imshow(win, frame)
             cv2.waitKey(1)
-        cv2.setMouseCallback(win, self._on_click)
+        cv2.setMouseCallback(win, self._on_mouse)
 
         _, label, _ = self._group()
         print(f"Mark: {label}")
-        print("Controls: click=mark, u=undo, t=threshold, +/-=adjust, "
+        print("Mouse: left-click=place, drag=move, right-click=delete")
+        print("Keys:  u=undo last, t=threshold, +/-=adjust, "
               "f=freeze, s=save, q=quit\n")
 
         while True:
