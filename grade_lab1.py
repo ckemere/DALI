@@ -123,11 +123,11 @@ def flash_firmware(build_dir, dslite_path, ccxml_path):
     return proc.returncode == 0, proc.stdout, proc.stderr
 
 
-def record_video(output_path, duration=VIDEO_DURATION):
+def start_recording(output_path, duration=VIDEO_DURATION):
     """
-    Record video from the default camera using ffmpeg.
+    Start recording video in the background using ffmpeg.
     Uses avfoundation on macOS.
-    Returns (success, error_message).
+    Returns a Popen process, or None on error.
     """
     cmd = [
         "ffmpeg",
@@ -141,18 +141,31 @@ def record_video(output_path, duration=VIDEO_DURATION):
         output_path,
     ]
     try:
-        proc = subprocess.run(
+        return subprocess.Popen(
             cmd,
-            capture_output=True,
-            text=True,
-            timeout=duration + 15,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+    except FileNotFoundError:
+        return None
+
+
+def finish_recording(proc, duration=VIDEO_DURATION):
+    """
+    Wait for a background ffmpeg recording to finish.
+    Returns (success, error_message).
+    """
+    if proc is None:
+        return False, "ffmpeg not found in PATH"
+    try:
+        _, stderr = proc.communicate(timeout=duration + 15)
         if proc.returncode == 0:
             return True, ""
-        return False, proc.stderr.strip().split("\n")[-1]
-    except FileNotFoundError:
-        return False, "ffmpeg not found in PATH"
+        err_lines = stderr.decode(errors="replace").strip().split("\n")
+        return False, err_lines[-1] if err_lines else "unknown error"
     except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
         return False, "Video recording timed out"
 
 
@@ -169,7 +182,7 @@ def student_name_from_zip(zip_name):
     return base
 
 
-def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True, video_dir=None):
+def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True, video_dir=None, video_duration=VIDEO_DURATION):
     """
     Main grading loop: iterate over zips, compile, optionally flash.
     """
@@ -246,6 +259,16 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True,
                     row["flash_errors"] = "DSLite not found"
                     print(f"  Flash: SKIPPED (DSLite not found)")
                 else:
+                    # Start recording before flashing so we capture
+                    # the board from the moment it begins running.
+                    rec_proc = None
+                    video_file = None
+                    if video_dir:
+                        video_file = f"{student}.mp4"
+                        video_path = os.path.join(video_dir, video_file)
+                        print(f"  Recording {video_duration}s video...")
+                        rec_proc = start_recording(video_path, video_duration)
+
                     try:
                         f_ok, f_out, f_err = flash_firmware(
                             build_dir, dslite_path, ccxml_path
@@ -261,17 +284,14 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True,
                         row["flash_errors"] = "Flash timed out"
                         print(f"  Flash: TIMEOUT")
 
-                # Record video of the board after successful flash
-                if row["flash_success"] and video_dir:
-                    video_file = f"{student}.mp4"
-                    video_path = os.path.join(video_dir, video_file)
-                    print(f"  Recording {VIDEO_DURATION}s video...")
-                    v_ok, v_err = record_video(video_path)
-                    if v_ok:
-                        row["video_file"] = video_file
-                        print(f"  Video: saved to {video_file}")
-                    else:
-                        print(f"  Video: FAILED ({v_err})")
+                    # Wait for video recording to finish
+                    if rec_proc is not None:
+                        v_ok, v_err = finish_recording(rec_proc, video_duration)
+                        if v_ok:
+                            row["video_file"] = video_file
+                            print(f"  Video: saved to {video_file}")
+                        else:
+                            print(f"  Video: FAILED ({v_err})")
 
         finally:
             shutil.rmtree(build_dir, ignore_errors=True)
@@ -357,12 +377,10 @@ def main():
     # Set up video directory next to the results CSV
     video_dir = None
     if not args.compile_only and dslite_path:
-        global VIDEO_DURATION
-        VIDEO_DURATION = args.video_duration
         results_parent = os.path.dirname(os.path.abspath(args.results_csv))
         video_dir = os.path.join(results_parent, "videos")
         os.makedirs(video_dir, exist_ok=True)
-        print(f"Videos: {video_dir} ({VIDEO_DURATION}s each)")
+        print(f"Videos: {video_dir} ({args.video_duration}s each)")
         # Verify ffmpeg is available
         if not shutil.which("ffmpeg"):
             print("Warning: ffmpeg not found in PATH. Video recording will fail.")
@@ -375,6 +393,7 @@ def main():
         results_csv=args.results_csv,
         flash=not args.compile_only,
         video_dir=video_dir,
+        video_duration=args.video_duration,
     )
 
 
