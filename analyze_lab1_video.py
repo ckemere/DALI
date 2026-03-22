@@ -56,6 +56,9 @@ class VideoAnalyzer:
         self.debug_pos = (debug[0]["x"], debug[0]["y"]) if debug else None
         self.radius = cal.get("sample_radius", 15)
         self.threshold = cal.get("threshold", 128)
+        # Separate threshold for debug LED (two LEDs close together
+        # produce different brightness characteristics)
+        self.debug_threshold = cal.get("debug_threshold", self.threshold)
 
     # ── internal helpers ────────────────────────────────────────────
 
@@ -163,12 +166,12 @@ class VideoAnalyzer:
                 )
                 outer = [b > self.threshold for b in outer_bri]
                 inner = [b > self.threshold for b in inner_bri]
-                debug = debug_bri > self.threshold
+                debug = debug_bri > self.debug_threshold
 
                 if verbose and diag_count < 5:
                     all_bri = outer_bri + inner_bri
-                    print(f"  [diag] t={t:.2f}s  threshold={self.threshold}  "
-                          f"debug={debug_bri:.0f}  "
+                    print(f"  [diag] t={t:.2f}s  thr={self.threshold}  "
+                          f"debug={debug_bri:.0f} (thr={self.debug_threshold})  "
                           f"LED min={min(all_bri):.0f}  max={max(all_bri):.0f}  "
                           f"mean={np.mean(all_bri):.0f}  "
                           f"on={sum(outer)+sum(inner)}/24")
@@ -373,7 +376,9 @@ def main():
     parser.add_argument("video", help="Path to .mp4 video file")
     parser.add_argument("calibration", help="Path to calibration JSON")
     parser.add_argument("--threshold", type=int, default=None,
-                        help="Override brightness threshold from calibration")
+                        help="Override brightness threshold for ring LEDs")
+    parser.add_argument("--debug-threshold", type=int, default=None,
+                        help="Override brightness threshold for debug/programming LED")
     args = parser.parse_args()
 
     video_path, cal_path = args.video, args.calibration
@@ -381,8 +386,11 @@ def main():
     analyzer = VideoAnalyzer(cal_path)
     if args.threshold is not None:
         analyzer.threshold = args.threshold
+    if args.debug_threshold is not None:
+        analyzer.debug_threshold = args.debug_threshold
     print(f"Analyzing: {video_path}")
-    print(f"Threshold: {analyzer.threshold}  Sample radius: {analyzer.radius}")
+    print(f"Threshold: {analyzer.threshold}  Debug threshold: {analyzer.debug_threshold}  "
+          f"Sample radius: {analyzer.radius}")
     timeline = analyzer.extract_timeline(video_path, verbose=True)
 
     if not timeline:

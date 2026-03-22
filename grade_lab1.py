@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from datetime import datetime
 
@@ -131,11 +132,18 @@ def flash_firmware(build_dir, dslite_path, ccxml_path):
     return proc.returncode == 0, proc.stdout, proc.stderr
 
 
-def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0):
+def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
+                    settle_time=3):
     """
     Start recording video in the background using ffmpeg.
     Auto-detects platform (Linux v4l2, macOS avfoundation).
     Uses CRF 28 for good compression of mostly-static LED footage.
+
+    Waits *settle_time* seconds after launching ffmpeg so the camera
+    is actually capturing before the caller proceeds (e.g. to flash
+    firmware).  This ensures the debug-LED flicker during programming
+    is recorded.
+
     Returns a Popen process, or None on error.
     """
     system = platform.system()
@@ -161,11 +169,19 @@ def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0):
         output_path,
     ]
     try:
-        return subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        # Give ffmpeg time to open the camera and start capturing
+        # so the caller can be confident frames are being recorded.
+        if settle_time > 0:
+            time.sleep(settle_time)
+            if proc.poll() is not None:
+                # ffmpeg exited immediately — camera issue
+                return None
+        return proc
     except FileNotFoundError:
         return None
 
