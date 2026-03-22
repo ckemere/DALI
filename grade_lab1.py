@@ -380,7 +380,8 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
 def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
                      camera_device=0, video_duration=VIDEO_DURATION,
                      compile_only=False, keep_build=False,
-                     video_dir=None, existing_video=None):
+                     video_dir=None, existing_video=None,
+                     threshold_override=None):
     """
     Process one student zip end-to-end with verbose output at every step.
     Useful for debugging the pipeline before running the full batch.
@@ -547,6 +548,8 @@ def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
 
     try:
         analyzer = VideoAnalyzer(calibration_path)
+        if threshold_override is not None:
+            analyzer.threshold = threshold_override
         timeline = analyzer.extract_timeline(result["video"], verbose=True)
         scores, changes = analyzer.score(timeline)
         result["scores"] = scores
@@ -629,6 +632,10 @@ def main():
         "--video",
         help="Path to a pre-recorded video (skip flash+record, run analysis only; --zip mode)"
     )
+    parser.add_argument(
+        "--threshold", type=int, default=None,
+        help="Override brightness threshold from calibration (e.g. 180)"
+    )
 
     args = parser.parse_args()
 
@@ -650,6 +657,7 @@ def main():
             keep_build=args.keep_build,
             video_dir=args.video_dir,
             existing_video=args.video,
+            threshold_override=args.threshold,
         )
         # Print summary as JSON for easy inspection
         print("\n--- Result summary ---")

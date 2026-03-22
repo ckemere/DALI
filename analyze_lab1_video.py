@@ -368,13 +368,19 @@ class VideoAnalyzer:
 # ── standalone CLI ──────────────────────────────────────────────────
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <video.mp4> <calibration.json>")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(description="Analyze Lab 1 LED clock video")
+    parser.add_argument("video", help="Path to .mp4 video file")
+    parser.add_argument("calibration", help="Path to calibration JSON")
+    parser.add_argument("--threshold", type=int, default=None,
+                        help="Override brightness threshold from calibration")
+    args = parser.parse_args()
 
-    video_path, cal_path = sys.argv[1], sys.argv[2]
+    video_path, cal_path = args.video, args.calibration
 
     analyzer = VideoAnalyzer(cal_path)
+    if args.threshold is not None:
+        analyzer.threshold = args.threshold
     print(f"Analyzing: {video_path}")
     print(f"Threshold: {analyzer.threshold}  Sample radius: {analyzer.radius}")
     timeline = analyzer.extract_timeline(video_path, verbose=True)
