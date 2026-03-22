@@ -379,7 +379,8 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
 
 def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
                      camera_device=0, video_duration=VIDEO_DURATION,
-                     compile_only=False, keep_build=False):
+                     compile_only=False, keep_build=False,
+                     video_dir=None, existing_video=None):
     """
     Process one student zip end-to-end with verbose output at every step.
     Useful for debugging the pipeline before running the full batch.
@@ -392,6 +393,8 @@ def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
         video_duration:    Seconds to record
         compile_only:      Stop after compilation
         keep_build:        Keep the build directory on disk for inspection
+        video_dir:         Directory to save recorded videos
+        existing_video:    Path to a pre-recorded video (skip flash+record)
 
     Returns:
         dict with results from each pipeline stage
@@ -468,50 +471,59 @@ def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
             shutil.rmtree(build_dir, ignore_errors=True)
         return result
 
-    if compile_only:
+    if compile_only and not existing_video:
         print(f"\n  --compile-only: stopping here.")
         print(f"  Build dir: {build_dir}")
         return result
 
-    # ── 4. Flash ──────────────────────────────────────────────────
-    print("\nStep 4/5: Flash firmware")
-    if not dslite_path:
-        print("  SKIP: DSLite not found (set DSLITE_PATH)")
+    # ── 4. Flash + Record ─────────────────────────────────────────
+    if existing_video:
+        # Skip flash/record entirely — use the provided video
+        print("\nStep 4/5: Flash firmware")
+        print(f"  SKIP: using existing video {existing_video}")
         result["flash"] = "skipped"
-        if not keep_build:
-            shutil.rmtree(build_dir, ignore_errors=True)
-        return result
-
-    # Start recording BEFORE flashing so we capture the debug LED
-    rec_proc = None
-    video_path = None
-    video_dir = os.path.dirname(os.path.abspath(zip_path))
-    video_path = os.path.join(video_dir, f"{student}.mp4")
-    print(f"  Starting {video_duration}s recording -> {video_path}")
-    rec_proc = start_recording(video_path, video_duration, camera_device)
-
-    try:
-        f_ok, f_out, f_err = flash_firmware(build_dir, dslite_path, ccxml_path)
-    except subprocess.TimeoutExpired:
-        f_ok, f_err = False, "Flash timed out"
-
-    result["flash"] = "ok" if f_ok else "fail"
-    if f_ok:
-        print(f"  PASS")
+        result["video"] = existing_video
     else:
-        print(f"  FAIL: {f_err.strip().split(chr(10))[0]}")
+        print("\nStep 4/5: Flash firmware")
+        if not dslite_path:
+            print("  SKIP: DSLite not found (set DSLITE_PATH)")
+            result["flash"] = "skipped"
+            if not keep_build:
+                shutil.rmtree(build_dir, ignore_errors=True)
+            return result
 
-    # Wait for recording
-    if rec_proc is not None:
-        print(f"  Waiting for video ({video_duration}s)...")
-        v_ok, v_err = finish_recording(rec_proc, video_duration)
-        if v_ok:
-            fsize = os.path.getsize(video_path)
-            print(f"  Video saved: {video_path} ({fsize:,} bytes)")
-            result["video"] = video_path
+        # Decide where to save the video
+        if video_dir is None:
+            video_dir = os.path.dirname(os.path.abspath(zip_path))
+        os.makedirs(video_dir, exist_ok=True)
+
+        # Start recording BEFORE flashing so we capture the debug LED
+        video_path = os.path.join(video_dir, f"{student}.mp4")
+        print(f"  Starting {video_duration}s recording -> {video_path}")
+        rec_proc = start_recording(video_path, video_duration, camera_device)
+
+        try:
+            f_ok, f_out, f_err = flash_firmware(build_dir, dslite_path, ccxml_path)
+        except subprocess.TimeoutExpired:
+            f_ok, f_err = False, "Flash timed out"
+
+        result["flash"] = "ok" if f_ok else "fail"
+        if f_ok:
+            print(f"  PASS")
         else:
-            print(f"  Video FAILED: {v_err}")
-            result["video"] = None
+            print(f"  FAIL: {f_err.strip().split(chr(10))[0]}")
+
+        # Wait for recording
+        if rec_proc is not None:
+            print(f"  Waiting for video ({video_duration}s)...")
+            v_ok, v_err = finish_recording(rec_proc, video_duration)
+            if v_ok:
+                fsize = os.path.getsize(video_path)
+                print(f"  Video saved: {video_path} ({fsize:,} bytes)")
+                result["video"] = video_path
+            else:
+                print(f"  Video FAILED: {v_err}")
+                result["video"] = None
 
     if not keep_build:
         shutil.rmtree(build_dir, ignore_errors=True)
@@ -609,6 +621,14 @@ def main():
         "--keep-build", action="store_true",
         help="Keep temporary build directory (for --zip debugging)"
     )
+    parser.add_argument(
+        "--video-dir",
+        help="Directory to save recorded videos (default: next to zip/results)"
+    )
+    parser.add_argument(
+        "--video",
+        help="Path to a pre-recorded video (skip flash+record, run analysis only; --zip mode)"
+    )
 
     args = parser.parse_args()
 
@@ -616,6 +636,9 @@ def main():
     if args.zip:
         if not os.path.isfile(args.zip):
             print(f"Error: {args.zip} not found")
+            sys.exit(1)
+        if args.video and not os.path.isfile(args.video):
+            print(f"Error: {args.video} not found")
             sys.exit(1)
         result = grade_single_zip(
             zip_path=args.zip,
@@ -625,6 +648,8 @@ def main():
             video_duration=args.video_duration,
             compile_only=args.compile_only,
             keep_build=args.keep_build,
+            video_dir=args.video_dir,
+            existing_video=args.video,
         )
         # Print summary as JSON for easy inspection
         print("\n--- Result summary ---")
@@ -666,8 +691,11 @@ def main():
     # Set up video directory next to the results CSV
     video_dir = None
     if not args.compile_only and dslite_path:
-        results_parent = os.path.dirname(os.path.abspath(args.results_csv))
-        video_dir = os.path.join(results_parent, "videos")
+        if args.video_dir:
+            video_dir = args.video_dir
+        else:
+            results_parent = os.path.dirname(os.path.abspath(args.results_csv))
+            video_dir = os.path.join(results_parent, "videos")
         os.makedirs(video_dir, exist_ok=True)
         print(f"Videos: {video_dir} ({args.video_duration}s each)")
         # Verify ffmpeg is available
