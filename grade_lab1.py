@@ -547,7 +547,7 @@ def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
 
     try:
         analyzer = VideoAnalyzer(calibration_path)
-        timeline = analyzer.extract_timeline(result["video"])
+        timeline = analyzer.extract_timeline(result["video"], verbose=True)
         scores, changes = analyzer.score(timeline)
         result["scores"] = scores
         result["analysis"] = "ok"

@@ -110,7 +110,7 @@ class VideoAnalyzer:
 
         return best_end
 
-    def extract_timeline(self, video_path, sample_fps=5):
+    def extract_timeline(self, video_path, sample_fps=5, verbose=False):
         """
         Sample LED on/off states from a video file.
 
@@ -122,6 +122,8 @@ class VideoAnalyzer:
             video_path: Path to the .mp4 file.
             sample_fps: How many samples per second to take (default 5).
                         Higher = more timing precision, slower to process.
+            verbose:    Print brightness diagnostics for the first few
+                        frames so you can verify the threshold.
 
         Returns:
             List of dicts: [{"t": float, "outer": [bool]*12,
@@ -138,6 +140,7 @@ class VideoAnalyzer:
 
         raw = []
         idx = 0
+        diag_count = 0
 
         while True:
             ret, frame = cap.read()
@@ -146,24 +149,43 @@ class VideoAnalyzer:
             if idx % skip == 0:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 t = idx / fps
-                outer = [
-                    self._brightness(gray, x, y) > self.threshold
+                outer_bri = [
+                    self._brightness(gray, x, y)
                     for x, y in self.outer_pos
                 ]
-                inner = [
-                    self._brightness(gray, x, y) > self.threshold
+                inner_bri = [
+                    self._brightness(gray, x, y)
                     for x, y in self.inner_pos
                 ]
-                debug = (
-                    self._brightness(gray, *self.debug_pos) > self.threshold
-                    if self.debug_pos else False
+                debug_bri = (
+                    self._brightness(gray, *self.debug_pos)
+                    if self.debug_pos else 0.0
                 )
+                outer = [b > self.threshold for b in outer_bri]
+                inner = [b > self.threshold for b in inner_bri]
+                debug = debug_bri > self.threshold
+
+                if verbose and diag_count < 5:
+                    all_bri = outer_bri + inner_bri
+                    print(f"  [diag] t={t:.2f}s  threshold={self.threshold}  "
+                          f"debug={debug_bri:.0f}  "
+                          f"LED min={min(all_bri):.0f}  max={max(all_bri):.0f}  "
+                          f"mean={np.mean(all_bri):.0f}  "
+                          f"on={sum(outer)+sum(inner)}/24")
+                    diag_count += 1
+
                 raw.append({
                     "t": t, "outer": outer, "inner": inner, "debug": debug,
                 })
             idx += 1
 
         cap.release()
+
+        if verbose and raw:
+            # Sample a frame from the middle of the video too
+            mid = raw[len(raw) // 2]
+            print(f"  [diag] mid-video t={mid['t']:.2f}s  "
+                  f"on={sum(mid['outer'])+sum(mid['inner'])}/24")
 
         # Detect t0 from debug LED flicker
         t0 = 0.0
@@ -354,7 +376,8 @@ def main():
 
     analyzer = VideoAnalyzer(cal_path)
     print(f"Analyzing: {video_path}")
-    timeline = analyzer.extract_timeline(video_path)
+    print(f"Threshold: {analyzer.threshold}  Sample radius: {analyzer.radius}")
+    timeline = analyzer.extract_timeline(video_path, verbose=True)
 
     if not timeline:
         print("No frames extracted.")
