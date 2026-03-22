@@ -477,62 +477,75 @@ def main():
         print("Error: use --flash or --submission, not both.")
         sys.exit(1)
 
-    # Flash a pre-compiled binary
-    if args.flash:
+    # Determine what needs to be flashed (validate + compile first,
+    # but defer the actual flash until after the camera is open).
+    flash_binary_path = None
+    flash_build_dir = None
+    dslite = None
+
+    if args.flash or args.submission:
         dslite = find_dslite()
         if not dslite:
             print("Error: DSLite not found. Set DSLITE_PATH or add to PATH.")
-            sys.exit(1)
-        print(f"Flashing: {args.flash}")
-        ok, err = flash_binary(args.flash, args.ccxml, dslite)
-        if ok:
-            print("Flash OK\n")
-        else:
-            print(f"Flash FAILED: {err}")
             sys.exit(1)
 
-    # Compile and flash a student submission zip
-    if args.submission:
-        dslite = find_dslite()
-        if not dslite:
-            print("Error: DSLite not found. Set DSLITE_PATH or add to PATH.")
+    if args.flash:
+        if not os.path.isfile(args.flash):
+            print(f"Error: {args.flash} not found")
             sys.exit(1)
+        flash_binary_path = args.flash
+
+    if args.submission:
         if not os.path.isfile(args.submission):
             print(f"Error: {args.submission} not found")
             sys.exit(1)
 
-        build_dir = tempfile.mkdtemp(prefix="calibrate_")
+        flash_build_dir = tempfile.mkdtemp(prefix="calibrate_")
         try:
             print(f"Extracting: {args.submission}")
-            extract_submission(args.submission, build_dir)
+            extract_submission(args.submission, flash_build_dir)
 
-            ok, err = ensure_infrastructure(build_dir)
+            ok, err = ensure_infrastructure(flash_build_dir)
             if not ok:
                 print(f"Error: {err}")
                 sys.exit(1)
 
             print("Compiling...")
-            ok, stdout, stderr = compile_submission(build_dir)
+            ok, stdout, stderr = compile_submission(flash_build_dir)
             if not ok:
                 print(f"Compile FAILED:\n{stderr[:500]}")
                 sys.exit(1)
             print("Compile OK")
 
-            print("Flashing...")
-            ok, stdout, stderr = flash_firmware(build_dir, dslite, args.ccxml)
-            if not ok:
-                print(f"Flash FAILED: {stderr[:200]}")
-                sys.exit(1)
-            print("Flash OK\n")
+            flash_binary_path = os.path.join(flash_build_dir, "Lab_1.out")
         except zipfile.BadZipFile:
             print(f"Error: {args.submission} is not a valid zip file")
             sys.exit(1)
-        finally:
-            shutil.rmtree(build_dir, ignore_errors=True)
 
-    # Run calibration
+    # Open camera FIRST so it's capturing before we flash.
+    # This lets the GUI (and any future recording) see the debug LED
+    # flicker during programming.
     gui = CalibrationGUI(args.camera, args.sample_radius)
-    cal = gui.run()
+
+    if flash_binary_path:
+        print(f"Flashing: {flash_binary_path}")
+        ok, err = flash_binary(flash_binary_path, args.ccxml, dslite)
+        if ok:
+            print("Flash OK\n")
+        else:
+            print(f"Flash FAILED: {err}")
+            gui.cap.release()
+            sys.exit(1)
+        # Clean up build dir now that we've flashed
+        if flash_build_dir:
+            shutil.rmtree(flash_build_dir, ignore_errors=True)
+            flash_build_dir = None
+
+    try:
+        cal = gui.run()
+    finally:
+        if flash_build_dir:
+            shutil.rmtree(flash_build_dir, ignore_errors=True)
 
     if cal:
         with open(args.output, "w") as f:
