@@ -17,7 +17,9 @@ Environment variables:
 
 import argparse
 import csv
+import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -31,10 +33,16 @@ from makefile_generator import (
     DEVICE_NAME,
 )
 
+try:
+    from analyze_lab1_video import VideoAnalyzer, SCORE_FIELDS
+except ImportError:
+    VideoAnalyzer = None
+    SCORE_FIELDS = []
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "template_files", "lab1")
 DEFAULT_CCXML = os.path.join(SCRIPT_DIR, "MSPM0G3507.ccxml")
-VIDEO_DURATION = 10  # seconds to record after flashing
+VIDEO_DURATION = 150  # seconds to record after flashing
 
 # Files from the template that are needed for building but students
 # don't modify (infrastructure files).
@@ -123,20 +131,32 @@ def flash_firmware(build_dir, dslite_path, ccxml_path):
     return proc.returncode == 0, proc.stdout, proc.stderr
 
 
-def start_recording(output_path, duration=VIDEO_DURATION):
+def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0):
     """
     Start recording video in the background using ffmpeg.
-    Uses avfoundation on macOS.
+    Auto-detects platform (Linux v4l2, macOS avfoundation).
+    Uses CRF 28 for good compression of mostly-static LED footage.
     Returns a Popen process, or None on error.
     """
+    system = platform.system()
+    if system == "Linux":
+        input_args = ["-f", "v4l2", "-framerate", "30",
+                      "-i", f"/dev/video{camera_device}"]
+    elif system == "Darwin":
+        input_args = ["-f", "avfoundation", "-framerate", "30",
+                      "-i", str(camera_device)]
+    else:
+        print(f"  Warning: unsupported platform {system} for recording")
+        return None
+
     cmd = [
         "ffmpeg",
-        "-y",  # overwrite
-        "-f", "avfoundation",
-        "-framerate", "30",
-        "-i", "0",  # default video device
+        "-y",
+        *input_args,
         "-t", str(duration),
         "-c:v", "libx264",
+        "-crf", "28",
+        "-preset", "fast",
         "-pix_fmt", "yuv420p",
         output_path,
     ]
@@ -182,10 +202,21 @@ def student_name_from_zip(zip_name):
     return base
 
 
-def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True, video_dir=None, video_duration=VIDEO_DURATION):
+def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
+              flash=True, video_dir=None, video_duration=VIDEO_DURATION,
+              calibration_path=None, camera_device=0):
     """
     Main grading loop: iterate over zips, compile, optionally flash.
+    If calibration_path is provided, runs video analysis after recording.
     """
+    analyzer = None
+    if calibration_path and VideoAnalyzer is not None:
+        try:
+            analyzer = VideoAnalyzer(calibration_path)
+            print(f"Video analysis enabled (calibration: {calibration_path})")
+        except Exception as e:
+            print(f"Warning: could not load calibration: {e}")
+            print("Video analysis disabled.\n")
     zip_files = sorted(
         f for f in os.listdir(submissions_dir) if f.endswith(".zip")
     )
@@ -267,7 +298,8 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True,
                         video_file = f"{student}.mp4"
                         video_path = os.path.join(video_dir, video_file)
                         print(f"  Recording {video_duration}s video...")
-                        rec_proc = start_recording(video_path, video_duration)
+                        rec_proc = start_recording(video_path, video_duration,
+                                                   camera_device)
 
                     try:
                         f_ok, f_out, f_err = flash_firmware(
@@ -290,6 +322,27 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True,
                         if v_ok:
                             row["video_file"] = video_file
                             print(f"  Video: saved to {video_file}")
+
+                            # Run video analysis if calibration available
+                            if analyzer is not None:
+                                try:
+                                    print(f"  Analyzing video...")
+                                    timeline = analyzer.extract_timeline(video_path)
+                                    scores, changes = analyzer.score(timeline)
+                                    for k, v in scores.items():
+                                        row[f"video_{k}"] = v
+                                    # Save change log alongside video
+                                    changes_path = os.path.join(
+                                        video_dir, f"{student}_changes.json"
+                                    )
+                                    with open(changes_path, "w") as cf:
+                                        json.dump(changes, cf, indent=1)
+                                    print(f"  Analysis: {scores.get('leds_activated', '?')} LEDs, "
+                                          f"timing={scores.get('timing_1hz', '?')}, "
+                                          f"wrap={scores.get('sequence_wrap', '?')}")
+                                except Exception as e:
+                                    print(f"  Analysis: FAILED ({e})")
+                                    row["video_analysis_error"] = str(e)
                         else:
                             print(f"  Video: FAILED ({v_err})")
 
@@ -307,8 +360,13 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv, flash=True,
             "flash_success", "flash_errors",
             "video_file",
         ]
+        # Add video analysis columns if any row has them
+        if analyzer is not None:
+            fieldnames.extend(f"video_{k}" for k in SCORE_FIELDS)
+            fieldnames.append("video_analysis_error")
         with open(results_csv, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=fieldnames,
+                                    extrasaction="ignore")
             writer.writeheader()
             writer.writerows(results)
         print(f"\nResults written to {results_csv}")
@@ -343,6 +401,14 @@ def main():
     parser.add_argument(
         "--video-duration", type=int, default=VIDEO_DURATION,
         help=f"Seconds of video to record after each flash (default: {VIDEO_DURATION})"
+    )
+    parser.add_argument(
+        "--calibration",
+        help="Path to calibration JSON from calibrate_lab1.py (enables video analysis)"
+    )
+    parser.add_argument(
+        "--camera", type=int, default=0,
+        help="Camera device index for recording (default: 0)"
     )
 
     args = parser.parse_args()
@@ -385,6 +451,15 @@ def main():
         if not shutil.which("ffmpeg"):
             print("Warning: ffmpeg not found in PATH. Video recording will fail.")
 
+    # Validate calibration file if provided
+    if args.calibration:
+        if not os.path.isfile(args.calibration):
+            print(f"Error: calibration file not found: {args.calibration}")
+            sys.exit(1)
+        if VideoAnalyzer is None:
+            print("Warning: opencv-python not installed. Video analysis disabled.")
+            print("  pip install opencv-python numpy\n")
+
     print()
     grade_all(
         submissions_dir=args.submissions_dir,
@@ -394,6 +469,8 @@ def main():
         flash=not args.compile_only,
         video_dir=video_dir,
         video_duration=args.video_duration,
+        calibration_path=args.calibration,
+        camera_device=args.camera,
     )
 
 
