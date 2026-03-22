@@ -10,6 +10,7 @@ analysis.
 Usage:
     python calibrate_lab1.py --camera 0 --output lab1_calibration.json
     python calibrate_lab1.py --flash reference.out --output lab1_calibration.json
+    python calibrate_lab1.py --submission student.zip --output lab1_calibration.json
 """
 
 import argparse
@@ -19,6 +20,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 
 try:
     import cv2
@@ -27,6 +30,13 @@ except ImportError:
     print("Error: opencv-python and numpy are required.")
     print("  pip install opencv-python numpy")
     sys.exit(1)
+
+from grade_lab1 import (
+    extract_submission,
+    ensure_infrastructure,
+    compile_submission,
+    flash_firmware,
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CCXML = os.path.join(SCRIPT_DIR, "MSPM0G3507.ccxml")
@@ -240,11 +250,15 @@ def main():
     )
     parser.add_argument(
         "--flash", metavar="BINARY",
-        help="Flash a reference .out binary onto the board before calibrating",
+        help="Flash a pre-compiled .out binary onto the board before calibrating",
+    )
+    parser.add_argument(
+        "--submission", metavar="ZIP",
+        help="Compile and flash a student submission zip before calibrating",
     )
     parser.add_argument(
         "--ccxml", default=DEFAULT_CCXML,
-        help="CCXML target config for DSLite (used with --flash)",
+        help="CCXML target config for DSLite (used with --flash/--submission)",
     )
     parser.add_argument(
         "--sample-radius", type=int, default=DEFAULT_SAMPLE_RADIUS,
@@ -252,7 +266,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # Optionally flash a reference binary
+    if args.flash and args.submission:
+        print("Error: use --flash or --submission, not both.")
+        sys.exit(1)
+
+    # Flash a pre-compiled binary
     if args.flash:
         dslite = find_dslite()
         if not dslite:
@@ -265,6 +283,45 @@ def main():
         else:
             print(f"Flash FAILED: {err}")
             sys.exit(1)
+
+    # Compile and flash a student submission zip
+    if args.submission:
+        dslite = find_dslite()
+        if not dslite:
+            print("Error: DSLite not found. Set DSLITE_PATH or add to PATH.")
+            sys.exit(1)
+        if not os.path.isfile(args.submission):
+            print(f"Error: {args.submission} not found")
+            sys.exit(1)
+
+        build_dir = tempfile.mkdtemp(prefix="calibrate_")
+        try:
+            print(f"Extracting: {args.submission}")
+            extract_submission(args.submission, build_dir)
+
+            ok, err = ensure_infrastructure(build_dir)
+            if not ok:
+                print(f"Error: {err}")
+                sys.exit(1)
+
+            print("Compiling...")
+            ok, stdout, stderr = compile_submission(build_dir)
+            if not ok:
+                print(f"Compile FAILED:\n{stderr[:500]}")
+                sys.exit(1)
+            print("Compile OK")
+
+            print("Flashing...")
+            ok, stdout, stderr = flash_firmware(build_dir, dslite, args.ccxml)
+            if not ok:
+                print(f"Flash FAILED: {stderr[:200]}")
+                sys.exit(1)
+            print("Flash OK\n")
+        except zipfile.BadZipFile:
+            print(f"Error: {args.submission} is not a valid zip file")
+            sys.exit(1)
+        finally:
+            shutil.rmtree(build_dir, ignore_errors=True)
 
     # Run calibration
     gui = CalibrationGUI(args.camera, args.sample_radius)
