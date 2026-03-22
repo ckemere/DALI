@@ -46,6 +46,7 @@ DEFAULT_SAMPLE_RADIUS = 15
 
 # Each group: (key, display_label, count)
 LED_GROUPS = [
+    ("debug_led", "Debug/Programming LED", 1),
     ("outer_ring", "Outer Ring (Hours)", 12),
     ("inner_ring", "Inner Ring (Seconds)", 12),
 ]
@@ -72,6 +73,7 @@ class CalibrationGUI:
     """Interactive GUI for marking LED positions on a live camera feed."""
 
     COLORS = [
+        (0, 0, 255),    # red     – debug LED
         (0, 165, 255),  # orange  – outer ring
         (0, 255, 0),    # green   – inner ring
     ]
@@ -292,6 +294,7 @@ class CalibrationGUI:
                 self.cap.release()
                 cv2.destroyAllWindows()
                 return {
+                    "debug_led": self.positions["debug_led"],
                     "outer_ring": self.positions["outer_ring"],
                     "inner_ring": self.positions["inner_ring"],
                     "threshold": self.threshold,

@@ -23,6 +23,7 @@ except ImportError:
 
 # Rubric score keys that appear in the results dict.
 SCORE_FIELDS = [
+    "t0_offset",
     "leds_start_off",
     "leds_activated",
     "avg_leds_on",
@@ -50,6 +51,9 @@ class VideoAnalyzer:
             cal = json.load(f)
         self.outer_pos = [(p["x"], p["y"]) for p in cal["outer_ring"]]
         self.inner_pos = [(p["x"], p["y"]) for p in cal["inner_ring"]]
+        # Debug/programming LED (optional for backward compat)
+        debug = cal.get("debug_led", [])
+        self.debug_pos = (debug[0]["x"], debug[0]["y"]) if debug else None
         self.radius = cal.get("sample_radius", 15)
         self.threshold = cal.get("threshold", 128)
 
@@ -68,9 +72,51 @@ class VideoAnalyzer:
 
     # ── timeline extraction ─────────────────────────────────────────
 
+    def _detect_t0(self, debug_samples):
+        """
+        Find the moment programming ends by looking for the debug LED
+        to stop flickering.  During flash the LED toggles rapidly;
+        once the student code starts it typically goes steady or off.
+
+        Args:
+            debug_samples: list of (time, is_on) tuples, sorted by time.
+
+        Returns:
+            t0 in seconds, or 0.0 if detection fails.
+        """
+        if len(debug_samples) < 10:
+            return 0.0
+
+        # Slide a 1-second window and count transitions (on↔off).
+        # Flash activity = high transition count.  We want the last
+        # window that had significant flickering.
+        window_sec = 1.0
+        best_end = 0.0
+        i_start = 0
+
+        for i_end in range(1, len(debug_samples)):
+            t_end = debug_samples[i_end][0]
+            # advance window start
+            while (debug_samples[i_start][0] < t_end - window_sec
+                   and i_start < i_end):
+                i_start += 1
+            # count transitions in window
+            transitions = sum(
+                1 for j in range(i_start + 1, i_end + 1)
+                if debug_samples[j][1] != debug_samples[j - 1][1]
+            )
+            if transitions >= 3:
+                best_end = t_end
+
+        return best_end
+
     def extract_timeline(self, video_path, sample_fps=5):
         """
         Sample LED on/off states from a video file.
+
+        If a debug LED position is calibrated, detects the end of
+        programming (flash activity) and reports times relative to
+        that point (t=0 = code starts running).
 
         Args:
             video_path: Path to the .mp4 file.
@@ -79,7 +125,9 @@ class VideoAnalyzer:
 
         Returns:
             List of dicts: [{"t": float, "outer": [bool]*12,
-                             "inner": [bool]*12}, ...]
+                             "inner": [bool]*12, "debug": bool}, ...]
+            where t is seconds since code started running (negative
+            values are during programming).
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -88,7 +136,7 @@ class VideoAnalyzer:
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         skip = max(1, int(fps / sample_fps))
 
-        timeline = []
+        raw = []
         idx = 0
 
         while True:
@@ -106,11 +154,28 @@ class VideoAnalyzer:
                     self._brightness(gray, x, y) > self.threshold
                     for x, y in self.inner_pos
                 ]
-                timeline.append({"t": t, "outer": outer, "inner": inner})
+                debug = (
+                    self._brightness(gray, *self.debug_pos) > self.threshold
+                    if self.debug_pos else False
+                )
+                raw.append({
+                    "t": t, "outer": outer, "inner": inner, "debug": debug,
+                })
             idx += 1
 
         cap.release()
-        return timeline
+
+        # Detect t0 from debug LED flicker
+        t0 = 0.0
+        if self.debug_pos and raw:
+            debug_samples = [(s["t"], s["debug"]) for s in raw]
+            t0 = self._detect_t0(debug_samples)
+
+        # Shift all times so t0 = 0
+        for s in raw:
+            s["t"] = round(s["t"] - t0, 3)
+
+        return raw
 
     # ── rubric scoring ──────────────────────────────────────────────
 
@@ -129,12 +194,20 @@ class VideoAnalyzer:
             empty = {k: "NO_DATA" for k in SCORE_FIELDS}
             return empty, []
 
-        total_time = timeline[-1]["t"]
-
         results = {}
 
+        # Filter to only post-programming frames (t >= 0)
+        post_flash = [s for s in timeline if s["t"] >= 0]
+        if not post_flash:
+            empty = {k: "NO_DATA" for k in SCORE_FIELDS}
+            return empty, []
+
+        results["t0_offset"] = f"{timeline[0]['t']:.1f}s"
+        total_time = post_flash[-1]["t"]
+
         # ── #9  LEDs start OFF ──────────────────────────────────────
-        early = [s for s in timeline if s["t"] < 2.0]
+        # Check first 2 seconds after code starts running (t=0..2)
+        early = [s for s in post_flash if s["t"] < 2.0]
         if early:
             all_off = all(
                 not any(s["outer"]) and not any(s["inner"]) for s in early
@@ -146,7 +219,7 @@ class VideoAnalyzer:
         # ── #10  All 24 LEDs activated at some point ────────────────
         outer_seen = [False] * 12
         inner_seen = [False] * 12
-        for s in timeline:
+        for s in post_flash:
             for i in range(12):
                 if s["outer"][i]:
                     outer_seen[i] = True
@@ -159,8 +232,8 @@ class VideoAnalyzer:
             f"(outer:{o_count}/12, inner:{i_count}/12)"
         )
 
-        # For remaining checks, skip first 3 s of startup.
-        running = [s for s in timeline if s["t"] > 3.0]
+        # For remaining checks, skip first 3 s after code starts.
+        running = [s for s in post_flash if s["t"] > 3.0]
         if not running:
             for k in SCORE_FIELDS:
                 results.setdefault(k, "NO_DATA")
@@ -173,7 +246,7 @@ class VideoAnalyzer:
         results["pct_exactly_2_on"] = f"{pct_two:.0f}%"
 
         # ── #12  Infinite loop (still running in last 30 s) ─────────
-        late = [s for s in timeline if s["t"] > total_time - 30]
+        late = [s for s in post_flash if s["t"] > total_time - 30]
         if len(late) > 1:
             changes_late = sum(
                 1
@@ -205,9 +278,9 @@ class VideoAnalyzer:
 
         # ── #16  Timing ~1 Hz ───────────────────────────────────────
         change_times = []
-        for i in range(1, len(timeline)):
-            if timeline[i]["inner"] != timeline[i - 1]["inner"]:
-                change_times.append(timeline[i]["t"])
+        for i in range(1, len(post_flash)):
+            if post_flash[i]["inner"] != post_flash[i - 1]["inner"]:
+                change_times.append(post_flash[i]["t"])
 
         if len(change_times) >= 3:
             intervals = np.diff(change_times)
@@ -248,8 +321,8 @@ class VideoAnalyzer:
 
         # ── Change log (useful for manual timing review) ────────────
         all_changes = []
-        for i in range(1, len(timeline)):
-            prev, cur = timeline[i - 1], timeline[i]
+        for i in range(1, len(post_flash)):
+            prev, cur = post_flash[i - 1], post_flash[i]
             if cur["outer"] != prev["outer"] or cur["inner"] != prev["inner"]:
                 outer_diff = [
                     j for j in range(12)
