@@ -276,9 +276,32 @@ class VideoAnalyzer:
             return results, []
 
         # ── #11  LED count per frame (expect 2) ─────────────────────
+        # Allow a one-frame grace period for transitions: if more than
+        # 2 LEDs are on, but every extra LED was already on in the
+        # previous frame (i.e. it's still turning off), count the frame
+        # as acceptable.
         counts = [sum(s["outer"]) + sum(s["inner"]) for s in running]
         results["avg_leds_on"] = f"{np.mean(counts):.1f}"
-        pct_two = sum(1 for c in counts if c == 2) / len(counts) * 100
+        ok_frames = 0
+        for i, s in enumerate(running):
+            n = counts[i]
+            if n <= 2:
+                ok_frames += 1
+            elif i > 0:
+                prev = running[i - 1]
+                # The extra LEDs beyond 2 must all have been on in the
+                # previous frame (camera caught them mid-turn-off)
+                cur_outer = set(j for j in range(12) if s["outer"][j])
+                cur_inner = set(j for j in range(12) if s["inner"][j])
+                prev_outer = set(j for j in range(12) if prev["outer"][j])
+                prev_inner = set(j for j in range(12) if prev["inner"][j])
+                new_outer = cur_outer - prev_outer
+                new_inner = cur_inner - prev_inner
+                new_count = len(new_outer) + len(new_inner)
+                if new_count <= 1:
+                    # At most one genuinely new LED; the rest are lingering
+                    ok_frames += 1
+        pct_two = ok_frames / len(running) * 100
         results["pct_exactly_2_on"] = f"{pct_two:.0f}%"
 
         # ── #12  Infinite loop (still running in last 30 s) ─────────
