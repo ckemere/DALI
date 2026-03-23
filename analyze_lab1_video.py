@@ -358,18 +358,28 @@ class VideoAnalyzer:
         for i in range(1, len(post_flash)):
             prev, cur = post_flash[i - 1], post_flash[i]
             if cur["outer"] != prev["outer"] or cur["inner"] != prev["inner"]:
-                outer_diff = [
+                outer_on = [
                     j for j in range(12)
-                    if cur["outer"][j] != prev["outer"][j]
+                    if cur["outer"][j] and not prev["outer"][j]
                 ]
-                inner_diff = [
+                outer_off = [
                     j for j in range(12)
-                    if cur["inner"][j] != prev["inner"][j]
+                    if not cur["outer"][j] and prev["outer"][j]
+                ]
+                inner_on = [
+                    j for j in range(12)
+                    if cur["inner"][j] and not prev["inner"][j]
+                ]
+                inner_off = [
+                    j for j in range(12)
+                    if not cur["inner"][j] and prev["inner"][j]
                 ]
                 all_changes.append({
                     "t": round(cur["t"], 2),
-                    "outer_changed": outer_diff,
-                    "inner_changed": inner_diff,
+                    "outer_on": outer_on,
+                    "outer_off": outer_off,
+                    "inner_on": inner_on,
+                    "inner_off": inner_off,
                 })
 
         results["total_state_changes"] = str(len(all_changes))
@@ -423,10 +433,16 @@ def main():
 
     print(f"\n=== State Changes (first 30 of {len(changes)}) ===")
     for c in changes[:30]:
-        print(
-            f"  t={c['t']:7.2f}s  "
-            f"outer:{c['outer_changed']}  inner:{c['inner_changed']}"
-        )
+        parts = []
+        if c["outer_on"]:
+            parts.append(f"outer ON:{c['outer_on']}")
+        if c["outer_off"]:
+            parts.append(f"outer OFF:{c['outer_off']}")
+        if c["inner_on"]:
+            parts.append(f"inner ON:{c['inner_on']}")
+        if c["inner_off"]:
+            parts.append(f"inner OFF:{c['inner_off']}")
+        print(f"  t={c['t']:7.2f}s  {('  ').join(parts)}")
     if len(changes) > 30:
         print(f"  ... and {len(changes) - 30} more")
 
