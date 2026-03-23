@@ -313,8 +313,11 @@ class CalibrationGUI:
                     draw_color = (0, 255, 255)   # yellow = ON
                 else:
                     draw_color = color           # group color = OFF
-                cv2.circle(display, (pos["x"], pos["y"]),
-                           self.sample_radius, draw_color, thickness)
+                r = self.sample_radius
+                cv2.rectangle(display,
+                              (pos["x"] - r, pos["y"] - r),
+                              (pos["x"] + r, pos["y"] + r),
+                              draw_color, thickness)
 
                 # Show LED index and brightness value
                 label_text = str(i + 1)
