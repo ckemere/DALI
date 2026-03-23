@@ -62,7 +62,7 @@ RUBRIC_ITEMS = [
 
 # Default Gemini model.  Flash is fast/cheap and sufficient for rubric
 # evaluation; students with unlimited academic licenses won't hit quotas.
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 _SYSTEM_PROMPT = """\
 You are an expert embedded-systems teaching assistant grading Lab 1
