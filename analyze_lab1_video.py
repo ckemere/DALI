@@ -82,17 +82,14 @@ class VideoAnalyzer:
 
     # ── timeline extraction ─────────────────────────────────────────
 
-    def _detect_t0(self, debug_samples, stable_sec=1.0):
+    def _detect_t0(self, debug_samples):
         """
-        Find the moment programming ends by looking for the debug LED
-        to go stably below threshold after having been on.  During
-        programming the debug LED is on; once student code starts it
-        turns off.
+        Find the moment programming ends by finding the last time the
+        debug LED is on.  During programming the debug LED is on; once
+        student code starts it turns off and stays off.
 
         Args:
             debug_samples: list of (time, is_on) tuples, sorted by time.
-            stable_sec:    how long the LED must stay off to count as
-                           stable (default 1.0 s).
 
         Returns:
             t0 in seconds, or 0.0 if detection fails.
@@ -100,23 +97,12 @@ class VideoAnalyzer:
         if not debug_samples:
             return 0.0
 
-        # Find the first sample where the LED goes off and stays off
-        # for at least stable_sec, but only after it has been on at
-        # least once (so we skip any initial off period before the
-        # camera catches the programming LED).
-        seen_on = False
-        off_start = None
+        last_on = None
         for t, is_on in debug_samples:
             if is_on:
-                seen_on = True
-                off_start = None
-            elif seen_on:
-                if off_start is None:
-                    off_start = t
-                elif t - off_start >= stable_sec:
-                    return off_start
+                last_on = t
 
-        return 0.0
+        return last_on if last_on is not None else 0.0
 
     def extract_timeline(self, video_path, sample_fps=0, verbose=False):
         """
