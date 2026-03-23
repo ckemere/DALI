@@ -189,6 +189,7 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
     for item_id in RUBRIC_ITEMS:
         fieldnames.append(f"llm_{item_id}_verdict")
         fieldnames.append(f"llm_{item_id}_reason")
+        fieldnames.append(f"llm_{item_id}_evidence")
     fieldnames.append("llm_error")
 
     csv_file = open(results_csv, "w", newline="")
@@ -253,11 +254,13 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                     if isinstance(entry, dict):
                         row[f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
                         row[f"llm_{item_id}_reason"] = entry.get("reason", "")
+                        row[f"llm_{item_id}_evidence"] = entry.get("evidence", "")
                         if entry.get("verdict") == "PASS":
                             passes += 1
                     else:
                         row[f"llm_{item_id}_verdict"] = "UNCLEAR"
                         row[f"llm_{item_id}_reason"] = str(entry)
+                        row[f"llm_{item_id}_evidence"] = ""
 
                 print(f"  LLM:   {passes}/{len(RUBRIC_ITEMS)} PASS  ({dt_llm:.1f}s)")
             except Exception as e:

@@ -63,6 +63,7 @@ def _write_csv(rows, output_path):
     for item_id in RUBRIC_ITEMS:
         fieldnames.append(f"{item_id}_verdict")
         fieldnames.append(f"{item_id}_reason")
+        fieldnames.append(f"{item_id}_evidence")
     fieldnames.append("error")
 
     with open(output_path, "w", newline="") as f:
@@ -196,6 +197,7 @@ def main():
                 if isinstance(entry, dict):
                     row[f"{item_id}_verdict"] = entry.get("verdict", "MISSING")
                     row[f"{item_id}_reason"] = entry.get("reason", "")
+                    row[f"{item_id}_evidence"] = entry.get("evidence", "")
                     if entry.get("verdict") == "PASS":
                         passes += 1
                     elif entry.get("verdict") == "FAIL":
@@ -203,6 +205,7 @@ def main():
                 else:
                     row[f"{item_id}_verdict"] = "UNCLEAR"
                     row[f"{item_id}_reason"] = str(entry)
+                    row[f"{item_id}_evidence"] = ""
 
             print(f"  PASS={passes}  FAIL={fails}  "
                   f"OTHER={len(RUBRIC_ITEMS) - passes - fails}")
