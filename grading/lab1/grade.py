@@ -38,6 +38,11 @@ from grading.build_utils import (
 
 from grading.video_analyzer import VideoAnalyzer
 from grading.lab1.score import score, SCORE_FIELDS
+from grading.lab1.code_review import (
+    RUBRIC_ITEMS,
+    review_submission,
+    DEFAULT_MODEL,
+)
 
 LAB_NAME = "lab1"
 OUTPUT_NAME = "Lab_1"
@@ -117,6 +122,155 @@ def analyze_videos(video_dir, calibration_path, results_csv,
 
     analyzed = sum(1 for r in results if "analysis_error" not in r)
     print(f"\nSummary: {analyzed}/{len(results)} analyzed successfully")
+
+
+def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
+                api_key=None, model=DEFAULT_MODEL,
+                threshold_override=None, verbose=False):
+    """
+    Combined batch grading: LLM code review of zips + video analysis of
+    pre-recorded videos, merged into a single CSV.
+
+    Matches students by name: zip files are matched to video files using
+    student_name_from_zip() for zips and the video filename stem.
+
+    Args:
+        submissions_dir: Directory of student .zip files.
+        video_dir:       Directory of pre-recorded <student>.mp4 videos.
+        calibration_path: Path to calibration JSON for video analysis.
+        results_csv:     Output CSV path.
+        api_key:         Gemini API key (or GEMINI_API_KEY env var).
+        model:           Gemini model name.
+        threshold_override: Optional brightness threshold override.
+        verbose:         Print LLM prompts/responses.
+    """
+    import time
+
+    # Discover zips
+    zip_files = {}
+    if submissions_dir and os.path.isdir(submissions_dir):
+        for f in sorted(os.listdir(submissions_dir)):
+            if f.endswith(".zip"):
+                name = student_name_from_zip(f)
+                zip_files[name] = os.path.join(submissions_dir, f)
+
+    # Discover videos
+    video_files = {}
+    analyzer = None
+    if video_dir and os.path.isdir(video_dir):
+        if calibration_path:
+            analyzer = VideoAnalyzer(calibration_path)
+            if threshold_override is not None:
+                analyzer.outer_threshold = threshold_override
+                analyzer.inner_threshold = threshold_override
+        for f in sorted(os.listdir(video_dir)):
+            if os.path.splitext(f)[1].lower() in _VIDEO_EXTS:
+                name = os.path.splitext(f)[0]
+                video_files[name] = os.path.join(video_dir, f)
+
+    # Union of all student names
+    all_students = sorted(set(zip_files) | set(video_files))
+    if not all_students:
+        print("No submissions or videos found.")
+        return
+
+    print(f"Students: {len(all_students)} "
+          f"({len(zip_files)} zips, {len(video_files)} videos)")
+    if analyzer:
+        print(f"Calibration: {calibration_path}")
+        print(f"Thresholds: outer={analyzer.outer_threshold}  "
+              f"inner={analyzer.inner_threshold}")
+    print(f"LLM model: {model}\n")
+
+    rows = []
+    for i, student in enumerate(all_students, 1):
+        print(f"[{i}/{len(all_students)}] {student}")
+        row = {"student": student}
+
+        # ── Video analysis ────────────────────────────────────────
+        if student in video_files and analyzer:
+            try:
+                timeline = analyzer.extract_timeline(video_files[student])
+                scores, changes, _, _ = score(timeline)
+                for k, v in scores.items():
+                    row[f"video_{k}"] = v
+
+                changes_path = video_files[student].replace(
+                    os.path.splitext(video_files[student])[1],
+                    "_changes.json"
+                )
+                with open(changes_path, "w") as cf:
+                    json.dump(changes, cf, indent=1)
+
+                print(f"  Video: {scores.get('leds_activated', '?')} LEDs, "
+                      f"timing={scores.get('timing_1hz', '?')}, "
+                      f"inner_cw={scores.get('inner_clockwise_sequence', '?')}")
+            except Exception as e:
+                print(f"  Video: FAILED ({e})")
+                row["video_error"] = str(e)
+        elif student in video_files:
+            print(f"  Video: SKIPPED (no calibration)")
+        else:
+            print(f"  Video: no video found")
+
+        # ── LLM code review ───────────────────────────────────────
+        if student in zip_files:
+            build_dir = tempfile.mkdtemp(prefix=f"review_{student}_")
+            try:
+                extract_submission(zip_files[student], build_dir)
+                results = review_submission(
+                    build_dir, api_key=api_key, model=model,
+                    verbose=verbose,
+                )
+                passes = 0
+                for item_id in RUBRIC_ITEMS:
+                    entry = results.get(item_id, {})
+                    if isinstance(entry, dict):
+                        row[f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
+                        row[f"llm_{item_id}_reason"] = entry.get("reason", "")
+                        if entry.get("verdict") == "PASS":
+                            passes += 1
+                    else:
+                        row[f"llm_{item_id}_verdict"] = "UNCLEAR"
+                        row[f"llm_{item_id}_reason"] = str(entry)
+
+                print(f"  LLM:   {passes}/{len(RUBRIC_ITEMS)} PASS")
+            except Exception as e:
+                print(f"  LLM:   FAILED ({e})")
+                row["llm_error"] = str(e)
+                # Rate-limit backoff: if we hit 429, wait before next request
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    print(f"  (rate limited, waiting 60s...)")
+                    time.sleep(60)
+            finally:
+                shutil.rmtree(build_dir, ignore_errors=True)
+        else:
+            print(f"  LLM:   no zip found")
+
+        rows.append(row)
+
+    # ── Write merged CSV ──────────────────────────────────────────
+    if rows:
+        fieldnames = ["student"]
+        fieldnames.extend(f"video_{k}" for k in SCORE_FIELDS)
+        fieldnames.append("video_error")
+        for item_id in RUBRIC_ITEMS:
+            fieldnames.append(f"llm_{item_id}_verdict")
+            fieldnames.append(f"llm_{item_id}_reason")
+        fieldnames.append("llm_error")
+
+        with open(results_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames,
+                                    extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"\nResults written to {results_csv}")
+
+    vid_ok = sum(1 for r in rows if any(
+        k.startswith("video_") and k != "video_error" for k in r))
+    llm_ok = sum(1 for r in rows if any(
+        k.startswith("llm_") and k != "llm_error" for k in r))
+    print(f"\nSummary: {vid_ok} video + {llm_ok} LLM out of {len(rows)} students")
 
 
 def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
@@ -488,6 +642,12 @@ def main():
         "--analyze-dir",
         help="Batch-analyze pre-recorded videos in a directory (no compile/flash)"
     )
+    source.add_argument(
+        "--grade-batch",
+        help="Combined grading: video analysis + LLM code review. "
+             "Value is the directory of .zip files. "
+             "Use --video-dir for pre-recorded videos."
+    )
 
     parser.add_argument(
         "--ccxml", default=DEFAULT_CCXML,
@@ -529,6 +689,18 @@ def main():
     parser.add_argument(
         "--threshold", type=int, default=None,
         help="Override brightness threshold from calibration (e.g. 180)"
+    )
+    parser.add_argument(
+        "--api-key",
+        help="Gemini API key for LLM code review (default: GEMINI_API_KEY env var)"
+    )
+    parser.add_argument(
+        "--model", default=DEFAULT_MODEL,
+        help=f"Gemini model for code review (default: {DEFAULT_MODEL})"
+    )
+    parser.add_argument(
+        "--verbose-llm", action="store_true",
+        help="Print LLM prompts and raw responses"
     )
 
     args = parser.parse_args()
@@ -577,6 +749,30 @@ def main():
             calibration_path=args.calibration,
             results_csv=args.results_csv,
             threshold_override=args.threshold,
+        )
+        sys.exit(0)
+
+    # ── Combined batch mode ──────────────────────────────────────
+    if args.grade_batch:
+        if not os.path.isdir(args.grade_batch):
+            print(f"Error: {args.grade_batch} is not a directory")
+            sys.exit(1)
+        api_key = args.api_key or os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            print("Error: set GEMINI_API_KEY or pass --api-key for code review")
+            sys.exit(1)
+        if args.calibration and not os.path.isfile(args.calibration):
+            print(f"Error: calibration file not found: {args.calibration}")
+            sys.exit(1)
+        grade_batch(
+            submissions_dir=args.grade_batch,
+            video_dir=args.video_dir,
+            calibration_path=args.calibration,
+            results_csv=args.results_csv,
+            api_key=api_key,
+            model=args.model,
+            threshold_override=args.threshold,
+            verbose=args.verbose_llm,
         )
         sys.exit(0)
 
