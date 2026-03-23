@@ -82,43 +82,38 @@ class VideoAnalyzer:
 
     # ── timeline extraction ─────────────────────────────────────────
 
-    def _detect_t0(self, debug_samples):
+    def _detect_t0(self, debug_samples, stable_sec=1.0):
         """
         Find the moment programming ends by looking for the debug LED
-        to stop flickering.  During flash the LED toggles rapidly;
-        once the student code starts it typically goes steady or off.
+        to go stably below threshold.  During/after programming the
+        debug LED is on; once the student code starts it turns off.
+
+        We find the first moment where the debug LED is off and stays
+        off for at least ``stable_sec`` seconds.
 
         Args:
             debug_samples: list of (time, is_on) tuples, sorted by time.
+            stable_sec:    how long the LED must stay off to count as
+                           stable (default 1.0 s).
 
         Returns:
             t0 in seconds, or 0.0 if detection fails.
         """
-        if len(debug_samples) < 10:
+        if not debug_samples:
             return 0.0
 
-        # Slide a 1-second window and count transitions (on↔off).
-        # Flash activity = high transition count.  We want the last
-        # window that had significant flickering.
-        window_sec = 1.0
-        best_end = 0.0
-        i_start = 0
+        # Find the first sample where the LED turns off and stays off
+        # for at least stable_sec.
+        off_start = None
+        for t, is_on in debug_samples:
+            if is_on:
+                off_start = None
+            elif off_start is None:
+                off_start = t
+            elif t - off_start >= stable_sec:
+                return off_start
 
-        for i_end in range(1, len(debug_samples)):
-            t_end = debug_samples[i_end][0]
-            # advance window start
-            while (debug_samples[i_start][0] < t_end - window_sec
-                   and i_start < i_end):
-                i_start += 1
-            # count transitions in window
-            transitions = sum(
-                1 for j in range(i_start + 1, i_end + 1)
-                if debug_samples[j][1] != debug_samples[j - 1][1]
-            )
-            if transitions >= 3:
-                best_end = t_end
-
-        return best_end
+        return 0.0
 
     def extract_timeline(self, video_path, sample_fps=0, verbose=False):
         """
