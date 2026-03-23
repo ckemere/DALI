@@ -54,10 +54,7 @@ RUBRIC_ITEMS = [
     "led_activation_logic",
     "infinite_loop",
     "data_structure_state_machine",
-    "two_active_hands",
-    "distinct_rings",
     "timing_delay",
-    "sequence_wrap",
 ]
 
 # Default Gemini model.  Flash is fast/cheap and sufficient for rubric
@@ -156,23 +153,14 @@ Rubric items:
     Does the code use a struct, array, enum, or switch-case to manage
     state rather than just linear if/else chains?
 
-14. "two_active_hands"
-    Does the logic successfully manage the "Two Active Hands" requirement,
-    ensuring that updating the Minute/Second hand does not accidentally
-    turn off the Hour hand (or vice versa)?
-
-15. "distinct_rings"
-    Does the code attempt to control both the Outer Ring (Hours) and
-    Inner Ring (Seconds) — i.e. are there references to at least two
-    separate sets of pins or two GPIO ports?
-
-16. "timing_delay"
+14. "timing_delay"
     Is there a delay mechanism (e.g. delay_cycles, __delay_cycles, or a
-    busy-wait loop) so changes are visible at approximately 1 Hz?
-
-17. "sequence_wrap"
-    Does the logic allow the sequence to wrap around (e.g. LED 12 → LED 1)?
-    Look for modulo arithmetic, comparison with a max value, or similar.
+    busy-wait loop)?  Compute the expected delay from the code: identify
+    the clock frequency (the MSPM0G3507 runs at 32 MHz by default) and
+    the cycle count passed to the delay function, then calculate the
+    resulting delay in seconds.  Report the computed value in your reason.
+    PASS if the computed delay is between 0.5 s and 2.0 s; FAIL
+    otherwise (or if no delay mechanism is found).
 """
 
 

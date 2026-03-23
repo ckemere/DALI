@@ -16,14 +16,72 @@ SCORE_FIELDS = [
     "leds_activated",
     "avg_leds_on",
     "pct_exactly_2_on",
-    "infinite_loop",
-    "two_hands",
     "distinct_rings",
     "timing_1hz",
     "timing_interval",
-    "sequence_wrap",
+    "inner_clockwise_sequence",
+    "outer_clockwise_sequence",
+    "inner_sequence_wrap",
+    "outer_sequence_wrap",
+    "hour_increment_at_wrap",
     "total_state_changes",
 ]
+
+
+def _extract_single_led_sequence(frames, ring_key):
+    """
+    From a list of frames, extract the sequence of active LED indices
+    for a given ring ('outer' or 'inner'), keeping only frames where
+    exactly one LED is on in that ring.  Consecutive duplicates are
+    removed so we get the sequence of transitions.
+
+    Returns a list of (time, led_index) tuples.
+    """
+    seq = []
+    for s in frames:
+        active = [i for i in range(12) if s[ring_key][i]]
+        if len(active) == 1:
+            idx = active[0]
+            if not seq or seq[-1][1] != idx:
+                seq.append((s["t"], idx))
+    return seq
+
+
+def _check_clockwise(seq):
+    """
+    Given a deduplicated sequence of (time, led_index), check whether
+    transitions are clockwise (each step is +1 mod 12).
+
+    Returns (verdict_str, n_correct, n_total).
+    """
+    if len(seq) < 2:
+        return "NO_DATA", 0, 0
+
+    correct = 0
+    total = len(seq) - 1
+    for i in range(total):
+        expected_next = (seq[i][1] + 1) % 12
+        if seq[i + 1][1] == expected_next:
+            correct += 1
+
+    pct = correct / total * 100
+    if pct >= 80:
+        verdict = "PASS"
+    elif pct >= 50:
+        verdict = "PARTIAL"
+    else:
+        verdict = "FAIL"
+    return f"{verdict} ({correct}/{total} steps clockwise, {pct:.0f}%)", correct, total
+
+
+def _check_wrap(seq):
+    """
+    Check whether the sequence contains a wrap (LED 11 -> LED 0).
+    """
+    for i in range(len(seq) - 1):
+        if seq[i][1] == 11 and seq[i + 1][1] == 0:
+            return True
+    return False
 
 
 def score(timeline):
@@ -55,9 +113,8 @@ def score(timeline):
         return empty, [], [], []
 
     results["t0_offset"] = f"{timeline[0]['t']:.1f}s"
-    total_time = post_flash[-1]["t"]
 
-    # ── #10  All 24 LEDs activated at some point ────────────────
+    # ── All 24 LEDs activated at some point ───────────────────────
     outer_seen = [False] * 12
     inner_seen = [False] * 12
     for s in post_flash:
@@ -73,29 +130,25 @@ def score(timeline):
         f"(outer:{o_count}/12, inner:{i_count}/12)"
     )
 
-    # For remaining checks, skip first 3 s after code starts.
-    running = [s for s in post_flash if s["t"] > 3.0]
-    if not running:
+    if len(post_flash) < 2:
         for k in SCORE_FIELDS:
             results.setdefault(k, "NO_DATA")
         return results, [], [], []
 
-    # ── #11  LED count per frame (expect 2) ─────────────────────
+    # ── LED count per frame (expect 2) ────────────────────────────
     # Allow a one-frame grace period for transitions: if more than
     # 2 LEDs are on, but every extra LED was already on in the
     # previous frame (i.e. it's still turning off), count the frame
     # as acceptable.
-    counts = [sum(s["outer"]) + sum(s["inner"]) for s in running]
+    counts = [sum(s["outer"]) + sum(s["inner"]) for s in post_flash]
     results["avg_leds_on"] = f"{np.mean(counts):.1f}"
     ok_frames = 0
-    for i, s in enumerate(running):
+    for i, s in enumerate(post_flash):
         n = counts[i]
         if n <= 2:
             ok_frames += 1
         elif i > 0:
-            prev = running[i - 1]
-            # The extra LEDs beyond 2 must all have been on in the
-            # previous frame (camera caught them mid-turn-off)
+            prev = post_flash[i - 1]
             cur_outer = set(j for j in range(12) if s["outer"][j])
             cur_inner = set(j for j in range(12) if s["inner"][j])
             prev_outer = set(j for j in range(12) if prev["outer"][j])
@@ -104,35 +157,11 @@ def score(timeline):
             new_inner = cur_inner - prev_inner
             new_count = len(new_outer) + len(new_inner)
             if new_count <= 1:
-                # At most one genuinely new LED; the rest are lingering
                 ok_frames += 1
-    pct_two = ok_frames / len(running) * 100
+    pct_two = ok_frames / len(post_flash) * 100
     results["pct_exactly_2_on"] = f"{pct_two:.0f}%"
 
-    # ── #12  Infinite loop (still running in last 30 s) ─────────
-    late = [s for s in post_flash if s["t"] > total_time - 30]
-    if len(late) > 1:
-        changes_late = sum(
-            1
-            for i in range(1, len(late))
-            if (late[i]["outer"] != late[i - 1]["outer"]
-                or late[i]["inner"] != late[i - 1]["inner"])
-        )
-        results["infinite_loop"] = (
-            "PASS" if changes_late > 0 else "FAIL"
-        )
-    else:
-        results["infinite_loop"] = "NO_DATA"
-
-    # ── #14  Two Active Hands ───────────────────────────────────
-    both = sum(
-        1 for s in running if any(s["outer"]) and any(s["inner"])
-    )
-    both_pct = both / len(running) * 100
-    verdict = "PASS" if both_pct > 50 else "FAIL"
-    results["two_hands"] = f"{verdict} ({both_pct:.0f}%)"
-
-    # ── #15  Distinct Rings ─────────────────────────────────────
+    # ── Distinct Rings ────────────────────────────────────────────
     if any(outer_seen) and any(inner_seen):
         results["distinct_rings"] = "PASS"
     elif any(outer_seen) or any(inner_seen):
@@ -140,7 +169,7 @@ def score(timeline):
     else:
         results["distinct_rings"] = "FAIL"
 
-    # ── #16  Timing ~1 Hz ───────────────────────────────────────
+    # ── Timing ~1 Hz (based on inner ring changes) ────────────────
     change_times = []
     for i in range(1, len(post_flash)):
         if post_flash[i]["inner"] != post_flash[i - 1]["inner"]:
@@ -164,26 +193,55 @@ def score(timeline):
         results["timing_1hz"] = "FAIL (too few changes)"
         results["timing_interval"] = ""
 
-    # ── #17  Sequence Wrap ──────────────────────────────────────
-    inner_seq = []
-    for s in running:
-        active = [i for i in range(12) if s["inner"][i]]
-        if len(active) == 1:
-            inner_seq.append(active[0])
+    # ── Clockwise Sequence (inner and outer rings) ────────────────
+    inner_seq = _extract_single_led_sequence(post_flash, "inner")
+    outer_seq = _extract_single_led_sequence(post_flash, "outer")
 
-    # De-duplicate consecutive identical values
-    deduped = []
-    for v in inner_seq:
-        if not deduped or deduped[-1] != v:
-            deduped.append(v)
+    inner_cw, _, _ = _check_clockwise(inner_seq)
+    outer_cw, _, _ = _check_clockwise(outer_seq)
+    results["inner_clockwise_sequence"] = inner_cw
+    results["outer_clockwise_sequence"] = outer_cw
 
-    has_wrap = any(
-        deduped[i] == 11 and deduped[i + 1] == 0
-        for i in range(len(deduped) - 1)
+    # ── Sequence Wrap (inner and outer, separately) ───────────────
+    results["inner_sequence_wrap"] = (
+        "PASS" if _check_wrap(inner_seq) else "NOT_OBSERVED"
     )
-    results["sequence_wrap"] = "PASS" if has_wrap else "NOT_OBSERVED"
+    results["outer_sequence_wrap"] = (
+        "PASS" if _check_wrap(outer_seq) else "NOT_OBSERVED"
+    )
 
-    # ── Change log (useful for manual timing review) ────────────
+    # ── Hour Increment at Wrap ────────────────────────────────────
+    # The hour hand (outer) should advance by one position each time
+    # the second hand (inner) wraps from LED 11 -> LED 0.
+    # We look for inner wrap events and check whether the outer ring
+    # changes within a small time window around each wrap.
+    inner_wrap_times = []
+    for i in range(len(inner_seq) - 1):
+        if inner_seq[i][1] == 11 and inner_seq[i + 1][1] == 0:
+            inner_wrap_times.append(inner_seq[i + 1][0])
+
+    if inner_wrap_times and len(outer_seq) >= 2:
+        hits = 0
+        for wrap_t in inner_wrap_times:
+            # Find outer ring transitions within ±2 seconds of the wrap
+            for j in range(len(outer_seq) - 1):
+                t_outer = outer_seq[j + 1][0]
+                if abs(t_outer - wrap_t) <= 2.0:
+                    # Check it was a +1 step
+                    if outer_seq[j + 1][1] == (outer_seq[j][1] + 1) % 12:
+                        hits += 1
+                        break
+        results["hour_increment_at_wrap"] = (
+            f"PASS ({hits}/{len(inner_wrap_times)} wraps)"
+            if hits == len(inner_wrap_times)
+            else f"FAIL ({hits}/{len(inner_wrap_times)} wraps triggered hour advance)"
+        )
+    elif not inner_wrap_times:
+        results["hour_increment_at_wrap"] = "NOT_OBSERVED (no inner wrap detected)"
+    else:
+        results["hour_increment_at_wrap"] = "NOT_OBSERVED (outer ring insufficient data)"
+
+    # ── Change log (useful for manual timing review) ──────────────
     all_changes = []
     for i in range(1, len(post_flash)):
         prev, cur = post_flash[i - 1], post_flash[i]

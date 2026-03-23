@@ -95,8 +95,8 @@ def analyze_videos(video_dir, calibration_path, results_csv,
 
             print(f"  LEDs: {scores.get('leds_activated', '?')}  "
                   f"timing={scores.get('timing_1hz', '?')}  "
-                  f"loop={scores.get('infinite_loop', '?')}  "
-                  f"wrap={scores.get('sequence_wrap', '?')}")
+                  f"inner_cw={scores.get('inner_clockwise_sequence', '?')}  "
+                  f"outer_cw={scores.get('outer_clockwise_sequence', '?')}")
         except Exception as e:
             print(f"  FAILED: {e}")
             row["analysis_error"] = str(e)
@@ -252,7 +252,7 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
                                         json.dump(changes, cf, indent=1)
                                     print(f"  Analysis: {scores.get('leds_activated', '?')} LEDs, "
                                           f"timing={scores.get('timing_1hz', '?')}, "
-                                          f"wrap={scores.get('sequence_wrap', '?')}")
+                                          f"inner_cw={scores.get('inner_clockwise_sequence', '?')}")
                                 except Exception as e:
                                     print(f"  Analysis: FAILED ({e})")
                                     row["video_analysis_error"] = str(e)
@@ -448,11 +448,14 @@ def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
         print(f"  t0 offset:   {scores.get('t0_offset', '?')}")
         print(f"  Activated:   {scores.get('leds_activated', '?')}")
         print(f"  Avg on:      {scores.get('avg_leds_on', '?')}")
-        print(f"  Two hands:   {scores.get('two_hands', '?')}")
+        print(f"  Distinct:    {scores.get('distinct_rings', '?')}")
         print(f"  Timing:      {scores.get('timing_1hz', '?')} "
               f"({scores.get('timing_interval', '')})")
-        print(f"  Loop:        {scores.get('infinite_loop', '?')}")
-        print(f"  Wrap:        {scores.get('sequence_wrap', '?')}")
+        print(f"  Inner CW:    {scores.get('inner_clockwise_sequence', '?')}")
+        print(f"  Outer CW:    {scores.get('outer_clockwise_sequence', '?')}")
+        print(f"  Inner wrap:  {scores.get('inner_sequence_wrap', '?')}")
+        print(f"  Outer wrap:  {scores.get('outer_sequence_wrap', '?')}")
+        print(f"  Hr@wrap:     {scores.get('hour_increment_at_wrap', '?')}")
         print(f"  Changes:     {scores.get('total_state_changes', '?')}")
 
         changes_path = result["video"].replace(".mp4", "_changes.json")
