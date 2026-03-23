@@ -99,9 +99,11 @@ class CalibrationGUI:
 
         self.positions = {key: [] for key, _, _ in LED_GROUPS}
         self.group_idx = 0
-        self.threshold = DEFAULT_THRESHOLD
         self.debug_threshold = DEFAULT_THRESHOLD
-        self.adjusting_debug = False  # toggle: which threshold +/- adjusts
+        self.outer_threshold = DEFAULT_THRESHOLD
+        self.inner_threshold = DEFAULT_THRESHOLD
+        # Which threshold +/- adjusts: 0=outer, 1=inner, 2=debug
+        self._thr_select = 0
         self.sample_radius = sample_radius
         self.show_threshold = False
         self.show_brightness = True
@@ -181,7 +183,8 @@ class CalibrationGUI:
             else:
                 print(f"  No clear gap — try pressing 'r' to reset, then "
                       f"observe with some LEDs ON and some OFF")
-            print(f"  Current threshold: {self.threshold}")
+            print(f"  Current thresholds: outer={self.outer_threshold}  "
+                  f"inner={self.inner_threshold}  debug={self.debug_threshold}")
         print()
 
     def _group(self):
@@ -274,7 +277,7 @@ class CalibrationGUI:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         if self.show_threshold:
-            _, mask = cv2.threshold(gray, self.threshold, 255,
+            _, mask = cv2.threshold(gray, self.outer_threshold, 255,
                                     cv2.THRESH_BINARY)
             display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
@@ -287,7 +290,9 @@ class CalibrationGUI:
         all_brightness = []
         for gi, (key, _, _) in enumerate(LED_GROUPS):
             color = self.COLORS[gi % len(self.COLORS)]
-            thr = self.debug_threshold if key == "debug_led" else self.threshold
+            thr = (self.debug_threshold if key == "debug_led"
+                   else self.inner_threshold if key == "inner_ring"
+                   else self.outer_threshold)
             for i, pos in enumerate(self.positions[key]):
                 bri = self._brightness(gray, pos["x"], pos["y"])
                 is_on = bri > thr
@@ -333,21 +338,22 @@ class CalibrationGUI:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
         # Live brightness summary bar
-        adjusting = "debug" if self.adjusting_debug else "LED"
+        thr_names = ["outer", "inner", "debug"]
+        adjusting = thr_names[self._thr_select]
+        thr_text = (f"outer={self.outer_threshold}  inner={self.inner_threshold}  "
+                    f"debug={self.debug_threshold}")
         if all_brightness:
             bmin, bmax = int(min(all_brightness)), int(max(all_brightness))
-            stats_text = (f"LED thr={self.threshold}  debug thr={self.debug_threshold}  "
-                          f"ON={on_count} OFF={off_count}  "
+            stats_text = (f"thr: {thr_text}  ON={on_count} OFF={off_count}  "
                           f"range={bmin}-{bmax}  [+/-]->{adjusting}")
         else:
-            stats_text = (f"LED thr={self.threshold}  debug thr={self.debug_threshold}  "
-                          f"[+/-]->{adjusting}")
+            stats_text = f"thr: {thr_text}  [+/-]->{adjusting}"
         cv2.putText(display, stats_text, (10, 55),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
         cv2.putText(
             display,
-            f"[t]hreshold [d]ebug-thr [+/-]adj [b]ri-stats [r]eset-stats  "
+            f"[t]hreshold [d]cycle-thr [+/-]adj [b]ri-stats [r]eset-stats  "
             f"drag=move  right-click=del  [u]ndo [f]reeze [s]ave [q]uit",
             (10, display.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1,
@@ -371,8 +377,8 @@ class CalibrationGUI:
         _, label, _ = self._group()
         print(f"Mark: {label}")
         print("Mouse: left-click=place, drag=move, right-click=delete")
-        print("Keys:  u=undo, t=threshold view, d=toggle debug/LED threshold,")
-        print("       +/-=adjust threshold, b=brightness stats, r=reset stats,")
+        print("Keys:  u=undo, t=threshold view, d=cycle threshold (outer/inner/debug),")
+        print("       +/-=adjust selected threshold, b=brightness stats, r=reset stats,")
         print("       f=freeze, s=save, q=quit\n")
 
         while True:
@@ -412,23 +418,29 @@ class CalibrationGUI:
             elif key == ord("t"):
                 self.show_threshold = not self.show_threshold
             elif key == ord("d"):
-                self.adjusting_debug = not self.adjusting_debug
-                which = "debug LED" if self.adjusting_debug else "ring LEDs"
-                print(f"  +/- now adjusts: {which} threshold")
+                self._thr_select = (self._thr_select + 1) % 3
+                names = ["outer ring", "inner ring", "debug LED"]
+                print(f"  +/- now adjusts: {names[self._thr_select]} threshold")
             elif key in (ord("+"), ord("=")):
-                if self.adjusting_debug:
+                if self._thr_select == 0:
+                    self.outer_threshold = min(255, self.outer_threshold + 5)
+                    print(f"  Outer threshold: {self.outer_threshold}")
+                elif self._thr_select == 1:
+                    self.inner_threshold = min(255, self.inner_threshold + 5)
+                    print(f"  Inner threshold: {self.inner_threshold}")
+                else:
                     self.debug_threshold = min(255, self.debug_threshold + 5)
                     print(f"  Debug threshold: {self.debug_threshold}")
-                else:
-                    self.threshold = min(255, self.threshold + 5)
-                    print(f"  LED threshold: {self.threshold}")
             elif key == ord("-"):
-                if self.adjusting_debug:
+                if self._thr_select == 0:
+                    self.outer_threshold = max(0, self.outer_threshold - 5)
+                    print(f"  Outer threshold: {self.outer_threshold}")
+                elif self._thr_select == 1:
+                    self.inner_threshold = max(0, self.inner_threshold - 5)
+                    print(f"  Inner threshold: {self.inner_threshold}")
+                else:
                     self.debug_threshold = max(0, self.debug_threshold - 5)
                     print(f"  Debug threshold: {self.debug_threshold}")
-                else:
-                    self.threshold = max(0, self.threshold - 5)
-                    print(f"  LED threshold: {self.threshold}")
             elif key == ord("f"):
                 if self.frozen_frame is None:
                     self.frozen_frame = frame.copy()
@@ -451,7 +463,8 @@ class CalibrationGUI:
                     "debug_led": self.positions["debug_led"],
                     "outer_ring": self.positions["outer_ring"],
                     "inner_ring": self.positions["inner_ring"],
-                    "threshold": self.threshold,
+                    "outer_threshold": self.outer_threshold,
+                    "inner_threshold": self.inner_threshold,
                     "debug_threshold": self.debug_threshold,
                     "sample_radius": self.sample_radius,
                 }

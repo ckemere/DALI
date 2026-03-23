@@ -565,7 +565,8 @@ def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
     try:
         analyzer = VideoAnalyzer(calibration_path)
         if threshold_override is not None:
-            analyzer.threshold = threshold_override
+            analyzer.outer_threshold = threshold_override
+            analyzer.inner_threshold = threshold_override
         timeline = analyzer.extract_timeline(result["video"], verbose=True)
         scores, changes = analyzer.score(timeline)
         result["scores"] = scores

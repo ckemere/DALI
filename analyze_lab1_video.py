@@ -55,10 +55,11 @@ class VideoAnalyzer:
         debug = cal.get("debug_led", [])
         self.debug_pos = (debug[0]["x"], debug[0]["y"]) if debug else None
         self.radius = cal.get("sample_radius", 15)
-        self.threshold = cal.get("threshold", 128)
-        # Separate threshold for debug LED (two LEDs close together
-        # produce different brightness characteristics)
-        self.debug_threshold = cal.get("debug_threshold", self.threshold)
+        # Per-group thresholds (fall back to legacy single "threshold" key)
+        legacy_thr = cal.get("threshold", 128)
+        self.outer_threshold = cal.get("outer_threshold", legacy_thr)
+        self.inner_threshold = cal.get("inner_threshold", legacy_thr)
+        self.debug_threshold = cal.get("debug_threshold", legacy_thr)
 
     # ── internal helpers ────────────────────────────────────────────
 
@@ -164,13 +165,15 @@ class VideoAnalyzer:
                     self._brightness(gray, *self.debug_pos)
                     if self.debug_pos else 0.0
                 )
-                outer = [b > self.threshold for b in outer_bri]
-                inner = [b > self.threshold for b in inner_bri]
+                outer = [b > self.outer_threshold for b in outer_bri]
+                inner = [b > self.inner_threshold for b in inner_bri]
                 debug = debug_bri > self.debug_threshold
 
                 if verbose and diag_count < 5:
                     all_bri = outer_bri + inner_bri
-                    print(f"  [diag] t={t:.2f}s  thr={self.threshold}  "
+                    print(f"  [diag] t={t:.2f}s  "
+                          f"outer_thr={self.outer_threshold}  "
+                          f"inner_thr={self.inner_threshold}  "
                           f"debug={debug_bri:.0f} (thr={self.debug_threshold})  "
                           f"LED min={min(all_bri):.0f}  max={max(all_bri):.0f}  "
                           f"mean={np.mean(all_bri):.0f}  "
@@ -375,8 +378,10 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze Lab 1 LED clock video")
     parser.add_argument("video", help="Path to .mp4 video file")
     parser.add_argument("calibration", help="Path to calibration JSON")
-    parser.add_argument("--threshold", type=int, default=None,
-                        help="Override brightness threshold for ring LEDs")
+    parser.add_argument("--outer-threshold", type=int, default=None,
+                        help="Override brightness threshold for outer ring LEDs")
+    parser.add_argument("--inner-threshold", type=int, default=None,
+                        help="Override brightness threshold for inner ring LEDs")
     parser.add_argument("--debug-threshold", type=int, default=None,
                         help="Override brightness threshold for debug/programming LED")
     args = parser.parse_args()
@@ -384,12 +389,15 @@ def main():
     video_path, cal_path = args.video, args.calibration
 
     analyzer = VideoAnalyzer(cal_path)
-    if args.threshold is not None:
-        analyzer.threshold = args.threshold
+    if args.outer_threshold is not None:
+        analyzer.outer_threshold = args.outer_threshold
+    if args.inner_threshold is not None:
+        analyzer.inner_threshold = args.inner_threshold
     if args.debug_threshold is not None:
         analyzer.debug_threshold = args.debug_threshold
     print(f"Analyzing: {video_path}")
-    print(f"Threshold: {analyzer.threshold}  Debug threshold: {analyzer.debug_threshold}  "
+    print(f"Thresholds: outer={analyzer.outer_threshold}  "
+          f"inner={analyzer.inner_threshold}  debug={analyzer.debug_threshold}  "
           f"Sample radius: {analyzer.radius}")
     timeline = analyzer.extract_timeline(video_path, verbose=True)
 
