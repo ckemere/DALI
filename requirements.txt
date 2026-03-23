@@ -8,3 +8,5 @@ gevent
 locust
 python-cas
 google-genai
+opencv-python
+numpy
