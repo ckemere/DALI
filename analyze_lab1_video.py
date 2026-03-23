@@ -64,7 +64,7 @@ class VideoAnalyzer:
     # ── internal helpers ────────────────────────────────────────────
 
     def _brightness(self, gray, x, y):
-        """Mean brightness in a square patch around (x, y)."""
+        """Mean brightness in a circular patch around (x, y)."""
         r = self.radius
         h, w = gray.shape
         y1, y2 = max(0, y - r), min(h, y + r)
@@ -72,7 +72,13 @@ class VideoAnalyzer:
         roi = gray[y1:y2, x1:x2]
         if roi.size == 0:
             return 0.0
-        return float(np.mean(roi))
+        ry, rx = np.ogrid[:roi.shape[0], :roi.shape[1]]
+        cy, cx = y - y1, x - x1
+        mask = (rx - cx) ** 2 + (ry - cy) ** 2 <= r * r
+        pixels = roi[mask]
+        if pixels.size == 0:
+            return 0.0
+        return float(np.mean(pixels))
 
     # ── timeline extraction ─────────────────────────────────────────
 

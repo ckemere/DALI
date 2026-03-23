@@ -116,7 +116,7 @@ class CalibrationGUI:
     # ── helpers ──────────────────────────────────────────────────────
 
     def _brightness(self, gray, x, y):
-        """Mean brightness in a square patch around (x, y)."""
+        """Mean brightness in a circular patch around (x, y)."""
         r = self.sample_radius
         h, w = gray.shape
         y1, y2 = max(0, y - r), min(h, y + r)
@@ -124,7 +124,14 @@ class CalibrationGUI:
         roi = gray[y1:y2, x1:x2]
         if roi.size == 0:
             return 0.0
-        return float(np.mean(roi))
+        # Build a circular mask within the ROI
+        ry, rx = np.ogrid[:roi.shape[0], :roi.shape[1]]
+        cy, cx = y - y1, x - x1
+        mask = (rx - cx) ** 2 + (ry - cy) ** 2 <= r * r
+        pixels = roi[mask]
+        if pixels.size == 0:
+            return 0.0
+        return float(np.mean(pixels))
 
     def _update_brightness_stats(self, gray):
         """Sample brightness at every marked position and update running stats."""
@@ -313,11 +320,8 @@ class CalibrationGUI:
                     draw_color = (0, 255, 255)   # yellow = ON
                 else:
                     draw_color = color           # group color = OFF
-                r = self.sample_radius
-                cv2.rectangle(display,
-                              (pos["x"] - r, pos["y"] - r),
-                              (pos["x"] + r, pos["y"] + r),
-                              draw_color, thickness)
+                cv2.circle(display, (pos["x"], pos["y"]),
+                           self.sample_radius, draw_color, thickness)
 
                 # Show LED index and brightness value
                 label_text = str(i + 1)
