@@ -42,6 +42,82 @@ from grading.lab1.score import score, SCORE_FIELDS
 LAB_NAME = "lab1"
 OUTPUT_NAME = "Lab_1"
 
+# Video extensions to look for in --analyze-dir mode
+_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
+
+
+def analyze_videos(video_dir, calibration_path, results_csv,
+                   threshold_override=None):
+    """
+    Batch-analyze pre-recorded videos in a directory.
+
+    Expects video files named <student>.mp4 (the stem becomes the
+    student identifier).  Produces a CSV with one row per video.
+    """
+    analyzer = VideoAnalyzer(calibration_path)
+    if threshold_override is not None:
+        analyzer.outer_threshold = threshold_override
+        analyzer.inner_threshold = threshold_override
+    print(f"Calibration: {calibration_path}")
+    print(f"Thresholds: outer={analyzer.outer_threshold}  "
+          f"inner={analyzer.inner_threshold}  debug={analyzer.debug_threshold}")
+
+    video_files = sorted(
+        f for f in os.listdir(video_dir)
+        if os.path.splitext(f)[1].lower() in _VIDEO_EXTS
+    )
+    if not video_files:
+        print(f"No video files found in {video_dir}")
+        return
+
+    print(f"Found {len(video_files)} videos\n")
+
+    results = []
+    for i, vname in enumerate(video_files, 1):
+        student = os.path.splitext(vname)[0]
+        video_path = os.path.join(video_dir, vname)
+        print(f"[{i}/{len(video_files)}] {student}")
+
+        row = {"student": student, "video_file": vname}
+
+        try:
+            timeline = analyzer.extract_timeline(video_path)
+            scores, changes, _, _ = score(timeline)
+            for k, v in scores.items():
+                row[k] = v
+
+            # Save change log alongside video
+            changes_path = os.path.join(
+                video_dir, f"{student}_changes.json"
+            )
+            with open(changes_path, "w") as cf:
+                json.dump(changes, cf, indent=1)
+
+            print(f"  LEDs: {scores.get('leds_activated', '?')}  "
+                  f"timing={scores.get('timing_1hz', '?')}  "
+                  f"loop={scores.get('infinite_loop', '?')}  "
+                  f"wrap={scores.get('sequence_wrap', '?')}")
+        except Exception as e:
+            print(f"  FAILED: {e}")
+            row["analysis_error"] = str(e)
+
+        results.append(row)
+
+    # Write CSV
+    if results:
+        fieldnames = ["student", "video_file"]
+        fieldnames.extend(SCORE_FIELDS)
+        fieldnames.append("analysis_error")
+        with open(results_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames,
+                                    extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(results)
+        print(f"\nResults written to {results_csv}")
+
+    analyzed = sum(1 for r in results if "analysis_error" not in r)
+    print(f"\nSummary: {analyzed}/{len(results)} analyzed successfully")
+
 
 def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
               flash=True, video_dir=None, video_duration=VIDEO_DURATION,
@@ -405,6 +481,10 @@ def main():
         "--submissions-dir",
         help="Directory containing student submission .zip files (batch mode)"
     )
+    source.add_argument(
+        "--analyze-dir",
+        help="Batch-analyze pre-recorded videos in a directory (no compile/flash)"
+    )
 
     parser.add_argument(
         "--ccxml", default=DEFAULT_CCXML,
@@ -478,7 +558,26 @@ def main():
             print(json.dumps(result["scores"], indent=2))
         sys.exit(0 if result.get("compile") == "ok" else 1)
 
-    # ── Batch mode ────────────────────────────────────────────────
+    # ── Analyze-only batch mode ───────────────────────────────────
+    if args.analyze_dir:
+        if not os.path.isdir(args.analyze_dir):
+            print(f"Error: {args.analyze_dir} is not a directory")
+            sys.exit(1)
+        if not args.calibration:
+            print("Error: --calibration is required for --analyze-dir")
+            sys.exit(1)
+        if not os.path.isfile(args.calibration):
+            print(f"Error: calibration file not found: {args.calibration}")
+            sys.exit(1)
+        analyze_videos(
+            video_dir=args.analyze_dir,
+            calibration_path=args.calibration,
+            results_csv=args.results_csv,
+            threshold_override=args.threshold,
+        )
+        sys.exit(0)
+
+    # ── Batch compile/flash mode ──────────────────────────────────
     if not os.path.isdir(args.submissions_dir):
         print(f"Error: {args.submissions_dir} is not a directory")
         sys.exit(1)
