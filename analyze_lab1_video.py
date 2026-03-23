@@ -221,8 +221,10 @@ class VideoAnalyzer:
             (results, changes)
             results : dict mapping score field names to result strings
             changes : list of dicts describing every state change
-                      [{"t": float, "outer_changed": [int],
-                        "inner_changed": [int]}, ...]
+                      [{"t": float, "outer_on": [int], "outer_off": [int],
+                        "inner_on": [int], "inner_off": [int]}, ...]
+            initial_outer : [bool]*12 LED state at t=0
+            initial_inner : [bool]*12 LED state at t=0
         """
         if not timeline:
             empty = {k: "NO_DATA" for k in SCORE_FIELDS}
@@ -384,7 +386,11 @@ class VideoAnalyzer:
 
         results["total_state_changes"] = str(len(all_changes))
 
-        return results, all_changes
+        # Include the initial LED state so callers can replay
+        initial_outer = list(post_flash[0]["outer"])
+        initial_inner = list(post_flash[0]["inner"])
+
+        return results, all_changes, initial_outer, initial_inner
 
 
 # ── standalone CLI ──────────────────────────────────────────────────
@@ -423,7 +429,7 @@ def main():
 
     print(f"Extracted {len(timeline)} samples over {timeline[-1]['t']:.1f}s\n")
 
-    results, changes = analyzer.score(timeline)
+    results, changes, initial_outer, initial_inner = analyzer.score(timeline)
 
     print("=== Rubric Scores ===")
     for key in SCORE_FIELDS:
@@ -432,17 +438,21 @@ def main():
             print(f"  {key:25s} {val}")
 
     print(f"\n=== State Changes (first 30 of {len(changes)}) ===")
+    # Replay state to show which LEDs are on after each change
+    outer_state = list(initial_outer)
+    inner_state = list(initial_inner)
     for c in changes[:30]:
-        parts = []
-        if c["outer_on"]:
-            parts.append(f"outer ON:{c['outer_on']}")
-        if c["outer_off"]:
-            parts.append(f"outer OFF:{c['outer_off']}")
-        if c["inner_on"]:
-            parts.append(f"inner ON:{c['inner_on']}")
-        if c["inner_off"]:
-            parts.append(f"inner OFF:{c['inner_off']}")
-        print(f"  t={c['t']:7.2f}s  {('  ').join(parts)}")
+        for i in c["outer_on"]:
+            outer_state[i] = True
+        for i in c["outer_off"]:
+            outer_state[i] = False
+        for i in c["inner_on"]:
+            inner_state[i] = True
+        for i in c["inner_off"]:
+            inner_state[i] = False
+        outer_on = [i for i in range(12) if outer_state[i]]
+        inner_on = [i for i in range(12) if inner_state[i]]
+        print(f"  t={c['t']:7.2f}s  outer:{outer_on}  inner:{inner_on}")
     if len(changes) > 30:
         print(f"  ... and {len(changes) - 30} more")
 

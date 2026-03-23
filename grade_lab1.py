@@ -344,7 +344,7 @@ def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
                                 try:
                                     print(f"  Analyzing video...")
                                     timeline = analyzer.extract_timeline(video_path)
-                                    scores, changes = analyzer.score(timeline)
+                                    scores, changes, _, _ = analyzer.score(timeline)
                                     for k, v in scores.items():
                                         row[f"video_{k}"] = v
                                     # Save change log alongside video
@@ -568,7 +568,7 @@ def grade_single_zip(zip_path, ccxml_path=DEFAULT_CCXML, calibration_path=None,
             analyzer.outer_threshold = threshold_override
             analyzer.inner_threshold = threshold_override
         timeline = analyzer.extract_timeline(result["video"], verbose=True)
-        scores, changes = analyzer.score(timeline)
+        scores, changes, _, _ = analyzer.score(timeline)
         result["scores"] = scores
         result["analysis"] = "ok"
 
