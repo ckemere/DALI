@@ -7,8 +7,12 @@ so the grader can click to mark each LED position.  The resulting
 calibration file is used by the grading script for automated video
 analysis.
 
+Alternatively, use --video to calibrate against a pre-recorded video
+(the video loops automatically).
+
 Usage:
     python calibrate_lab1.py --camera 0 --output lab1_calibration.json
+    python calibrate_lab1.py --video recording.mp4 --output lab1_calibration.json
     python calibrate_lab1.py --flash reference.out --output lab1_calibration.json
     python calibrate_lab1.py --submission student.zip --output lab1_calibration.json
 """
@@ -80,10 +84,18 @@ class CalibrationGUI:
 
     DRAG_THRESHOLD = 20  # pixels – click within this to grab an existing point
 
-    def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS):
-        self.cap = cv2.VideoCapture(camera_device)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"Cannot open camera device {camera_device}")
+    def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS,
+                 video_path=None):
+        if video_path:
+            self.cap = cv2.VideoCapture(video_path)
+            if not self.cap.isOpened():
+                raise RuntimeError(f"Cannot open video file {video_path}")
+            self._video_path = video_path
+        else:
+            self.cap = cv2.VideoCapture(camera_device)
+            if not self.cap.isOpened():
+                raise RuntimeError(f"Cannot open camera device {camera_device}")
+            self._video_path = None
 
         self.positions = {key: [] for key, _, _ in LED_GROUPS}
         self.group_idx = 0
@@ -367,8 +379,16 @@ class CalibrationGUI:
             if self.frozen_frame is None:
                 ret, frame = self.cap.read()
                 if not ret:
-                    print("Camera read failed")
-                    break
+                    if self._video_path:
+                        # Loop the video back to the beginning
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, frame = self.cap.read()
+                        if not ret:
+                            print("Video read failed")
+                            break
+                    else:
+                        print("Camera read failed")
+                        break
             else:
                 frame = self.frozen_frame
 
@@ -452,6 +472,10 @@ def main():
         help="Camera device index (default: 0)",
     )
     parser.add_argument(
+        "--video", metavar="FILE",
+        help="Use a pre-recorded video file instead of a live camera (loops automatically)",
+    )
+    parser.add_argument(
         "--output", default=DEFAULT_OUTPUT,
         help=f"Output calibration JSON (default: {DEFAULT_OUTPUT})",
     )
@@ -525,7 +549,14 @@ def main():
     # Open camera FIRST so it's capturing before we flash.
     # This lets the GUI (and any future recording) see the debug LED
     # flicker during programming.
-    gui = CalibrationGUI(args.camera, args.sample_radius)
+    if args.video:
+        if not os.path.isfile(args.video):
+            print(f"Error: {args.video} not found")
+            sys.exit(1)
+        gui = CalibrationGUI(sample_radius=args.sample_radius,
+                             video_path=args.video)
+    else:
+        gui = CalibrationGUI(args.camera, args.sample_radius)
 
     if flash_binary_path:
         print(f"Flashing: {flash_binary_path}")
