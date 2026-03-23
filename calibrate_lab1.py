@@ -317,7 +317,7 @@ class CalibrationGUI:
                 if is_dragged:
                     draw_color = (255, 255, 255)
                 elif is_on:
-                    draw_color = (0, 255, 255)   # yellow = ON
+                    draw_color = (200, 50, 0)    # dark blue = ON
                 else:
                     draw_color = color           # group color = OFF
                 cv2.circle(display, (pos["x"], pos["y"]),
