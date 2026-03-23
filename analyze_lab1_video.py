@@ -120,7 +120,7 @@ class VideoAnalyzer:
 
         return best_end
 
-    def extract_timeline(self, video_path, sample_fps=5, verbose=False):
+    def extract_timeline(self, video_path, sample_fps=0, verbose=False):
         """
         Sample LED on/off states from a video file.
 
@@ -130,8 +130,8 @@ class VideoAnalyzer:
 
         Args:
             video_path: Path to the .mp4 file.
-            sample_fps: How many samples per second to take (default 5).
-                        Higher = more timing precision, slower to process.
+            sample_fps: How many samples per second to take (0 = every
+                        frame, i.e. native video fps).
             verbose:    Print brightness diagnostics for the first few
                         frames so you can verify the threshold.
 
@@ -146,7 +146,7 @@ class VideoAnalyzer:
             raise ValueError(f"Cannot open video: {video_path}")
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        skip = max(1, int(fps / sample_fps))
+        skip = 1 if sample_fps <= 0 else max(1, int(fps / sample_fps))
 
         raw = []
         idx = 0
