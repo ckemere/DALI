@@ -7,3 +7,4 @@ markdown
 gevent
 locust
 python-cas
+google-genai
