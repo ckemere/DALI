@@ -182,13 +182,33 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
               f"inner={analyzer.inner_threshold}")
     print(f"LLM model: {model}\n")
 
+    # ── Prepare CSV for incremental writes ─────────────────────
+    fieldnames = ["student"]
+    fieldnames.extend(f"video_{k}" for k in SCORE_FIELDS)
+    fieldnames.append("video_error")
+    for item_id in RUBRIC_ITEMS:
+        fieldnames.append(f"llm_{item_id}_verdict")
+        fieldnames.append(f"llm_{item_id}_reason")
+    fieldnames.append("llm_error")
+
+    csv_file = open(results_csv, "w", newline="")
+    writer = csv.DictWriter(csv_file, fieldnames=fieldnames,
+                            extrasaction="ignore")
+    writer.writeheader()
+    csv_file.flush()
+
     rows = []
+    t_batch_start = time.time()
     for i, student in enumerate(all_students, 1):
-        print(f"[{i}/{len(all_students)}] {student}")
+        t_student_start = time.time()
+        elapsed = t_student_start - t_batch_start
+        print(f"\n[{i}/{len(all_students)}] {student}  "
+              f"(elapsed {elapsed:.0f}s)")
         row = {"student": student}
 
         # ── Video analysis ────────────────────────────────────────
         if student in video_files and analyzer:
+            print(f"  Video: analyzing {os.path.basename(video_files[student])}...")
             try:
                 timeline = analyzer.extract_timeline(video_files[student])
                 scores, changes, _, _ = score(timeline)
@@ -202,9 +222,11 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 with open(changes_path, "w") as cf:
                     json.dump(changes, cf, indent=1)
 
+                dt = time.time() - t_student_start
                 print(f"  Video: {scores.get('leds_activated', '?')} LEDs, "
                       f"timing={scores.get('timing_1hz', '?')}, "
-                      f"inner_cw={scores.get('inner_clockwise_sequence', '?')}")
+                      f"inner_cw={scores.get('inner_clockwise_sequence', '?')}  "
+                      f"({dt:.1f}s)")
             except Exception as e:
                 print(f"  Video: FAILED ({e})")
                 row["video_error"] = str(e)
@@ -215,13 +237,16 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
 
         # ── LLM code review ───────────────────────────────────────
         if student in zip_files:
+            print(f"  LLM:   sending to {model}...")
             build_dir = tempfile.mkdtemp(prefix=f"review_{student}_")
             try:
                 extract_submission(zip_files[student], build_dir)
+                t_llm_start = time.time()
                 results = review_submission(
                     build_dir, api_key=api_key, model=model,
                     verbose=verbose,
                 )
+                dt_llm = time.time() - t_llm_start
                 passes = 0
                 for item_id in RUBRIC_ITEMS:
                     entry = results.get(item_id, {})
@@ -234,7 +259,7 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                         row[f"llm_{item_id}_verdict"] = "UNCLEAR"
                         row[f"llm_{item_id}_reason"] = str(entry)
 
-                print(f"  LLM:   {passes}/{len(RUBRIC_ITEMS)} PASS")
+                print(f"  LLM:   {passes}/{len(RUBRIC_ITEMS)} PASS  ({dt_llm:.1f}s)")
             except Exception as e:
                 print(f"  LLM:   FAILED ({e})")
                 row["llm_error"] = str(e)
@@ -248,29 +273,22 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             print(f"  LLM:   no zip found")
 
         rows.append(row)
+        writer.writerow(row)
+        csv_file.flush()
 
-    # ── Write merged CSV ──────────────────────────────────────────
-    if rows:
-        fieldnames = ["student"]
-        fieldnames.extend(f"video_{k}" for k in SCORE_FIELDS)
-        fieldnames.append("video_error")
-        for item_id in RUBRIC_ITEMS:
-            fieldnames.append(f"llm_{item_id}_verdict")
-            fieldnames.append(f"llm_{item_id}_reason")
-        fieldnames.append("llm_error")
+        dt_total = time.time() - t_student_start
+        print(f"  Done   ({dt_total:.1f}s, CSV updated)")
 
-        with open(results_csv, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames,
-                                    extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"\nResults written to {results_csv}")
+    csv_file.close()
+    print(f"\nResults written to {results_csv}")
 
     vid_ok = sum(1 for r in rows if any(
         k.startswith("video_") and k != "video_error" for k in r))
     llm_ok = sum(1 for r in rows if any(
         k.startswith("llm_") and k != "llm_error" for k in r))
-    print(f"\nSummary: {vid_ok} video + {llm_ok} LLM out of {len(rows)} students")
+    total_time = time.time() - t_batch_start
+    print(f"\nSummary: {vid_ok} video + {llm_ok} LLM out of {len(rows)} students  "
+          f"({total_time:.0f}s total)")
 
 
 def grade_all(submissions_dir, ccxml_path, dslite_path, results_csv,
