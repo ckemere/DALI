@@ -24,7 +24,6 @@ except ImportError:
 # Rubric score keys that appear in the results dict.
 SCORE_FIELDS = [
     "t0_offset",
-    "leds_start_off",
     "leds_activated",
     "avg_leds_on",
     "pct_exactly_2_on",
@@ -224,17 +223,6 @@ class VideoAnalyzer:
 
         results["t0_offset"] = f"{timeline[0]['t']:.1f}s"
         total_time = post_flash[-1]["t"]
-
-        # ── #9  LEDs start OFF ──────────────────────────────────────
-        # Check first 2 seconds after code starts running (t=0..2)
-        early = [s for s in post_flash if s["t"] < 2.0]
-        if early:
-            all_off = all(
-                not any(s["outer"]) and not any(s["inner"]) for s in early
-            )
-            results["leds_start_off"] = "PASS" if all_off else "FAIL"
-        else:
-            results["leds_start_off"] = "NO_DATA"
 
         # ── #10  All 24 LEDs activated at some point ────────────────
         outer_seen = [False] * 12
