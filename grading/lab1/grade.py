@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -240,17 +241,37 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         if student in zip_files:
             print(f"  LLM:   sending to {model}...")
             build_dir = tempfile.mkdtemp(prefix=f"review_{student}_")
+            max_retries = 3
             try:
                 extract_submission(zip_files[student], build_dir)
-                t_llm_start = time.time()
-                results = review_submission(
-                    build_dir, api_key=api_key, model=model,
-                    verbose=verbose,
-                )
+                llm_result = None
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        t_llm_start = time.time()
+                        llm_result = review_submission(
+                            build_dir, api_key=api_key, model=model,
+                            verbose=verbose,
+                        )
+                        break  # success
+                    except Exception as e:
+                        err_str = str(e)
+                        is_rate_limit = ("429" in err_str
+                                         or "RESOURCE_EXHAUSTED" in err_str)
+                        if is_rate_limit and attempt < max_retries:
+                            # Parse retry delay from error message
+                            m = re.search(r'retry\w*\s+in\s+([\d.]+)s',
+                                          err_str, re.IGNORECASE)
+                            wait = float(m.group(1)) + 5 if m else 45.0
+                            print(f"  LLM:   rate limited (attempt {attempt}/{max_retries}), "
+                                  f"waiting {wait:.0f}s...")
+                            time.sleep(wait)
+                        else:
+                            raise  # non-retryable or last attempt
+
                 dt_llm = time.time() - t_llm_start
                 passes = 0
                 for item_id in RUBRIC_ITEMS:
-                    entry = results.get(item_id, {})
+                    entry = llm_result.get(item_id, {})
                     if isinstance(entry, dict):
                         row[f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
                         row[f"llm_{item_id}_reason"] = entry.get("reason", "")
@@ -266,10 +287,6 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             except Exception as e:
                 print(f"  LLM:   FAILED ({e})")
                 row["llm_error"] = str(e)
-                # Rate-limit backoff: if we hit 429, wait before next request
-                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                    print(f"  (rate limited, waiting 60s...)")
-                    time.sleep(60)
             finally:
                 shutil.rmtree(build_dir, ignore_errors=True)
         else:
