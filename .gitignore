@@ -85,7 +85,6 @@ ipython_config.py
 
 # Environments
 .env
-env.sh
 venv/
 
 # Visual Studio Code
