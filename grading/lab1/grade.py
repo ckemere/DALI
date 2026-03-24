@@ -241,11 +241,12 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         if student in zip_files:
             print(f"  LLM:   sending to {model}...")
             build_dir = tempfile.mkdtemp(prefix=f"review_{student}_")
-            max_retries = 3
             try:
                 extract_submission(zip_files[student], build_dir)
                 llm_result = None
-                for attempt in range(1, max_retries + 1):
+                attempt = 0
+                while True:
+                    attempt += 1
                     try:
                         t_llm_start = time.time()
                         llm_result = review_submission(
@@ -257,16 +258,16 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                         err_str = str(e)
                         is_rate_limit = ("429" in err_str
                                          or "RESOURCE_EXHAUSTED" in err_str)
-                        if is_rate_limit and attempt < max_retries:
+                        if is_rate_limit:
                             # Parse retry delay from error message
                             m = re.search(r'retry\w*\s+in\s+([\d.]+)s',
                                           err_str, re.IGNORECASE)
-                            wait = float(m.group(1)) + 5 if m else 45.0
-                            print(f"  LLM:   rate limited (attempt {attempt}/{max_retries}), "
+                            wait = float(m.group(1)) + 5 if m else 60.0
+                            print(f"  LLM:   rate limited (attempt {attempt}), "
                                   f"waiting {wait:.0f}s...")
                             time.sleep(wait)
                         else:
-                            raise  # non-retryable or last attempt
+                            raise  # non-retryable error
 
                 dt_llm = time.time() - t_llm_start
                 passes = 0
