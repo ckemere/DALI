@@ -42,6 +42,8 @@ from grading.video_analyzer import VideoAnalyzer
 from grading.lab1.score import score, SCORE_FIELDS
 from grading.lab1.code_review import (
     RUBRIC_ITEMS,
+    DOC_RUBRIC_ITEMS,
+    CODE_RUBRIC_ITEMS,
     review_submission,
     review_bulk,
     DEFAULT_MODEL,
@@ -172,7 +174,8 @@ def _parse_rate_limit(err_str):
 
 def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 api_key=None, model=DEFAULT_MODEL,
-                threshold_override=None, verbose=False, bulk_runs=0):
+                threshold_override=None, verbose=False, bulk_runs=0,
+                skip_video=False):
     """
     Combined batch grading: LLM code review of zips + video analysis of
     pre-recorded videos, merged into a single CSV.
@@ -252,7 +255,9 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
     t_batch_start = time.time()
 
     # ── Phase 1: Video analysis ──────────────────────────────
-    if analyzer and video_files:
+    if skip_video:
+        print("── Video analysis: SKIPPED (--skip-video) ──\n")
+    elif analyzer and video_files:
         print("── Video analysis ──")
         for i, student in enumerate(all_students, 1):
             if student not in video_files:
@@ -286,9 +291,9 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
     students_with_zips = [s for s in all_students if s in zip_files]
 
     if students_with_zips and bulk_runs:
-        # ── Bulk mode: all students in one request ────────────
+        # ── Bulk mode: split into docs + code requests ────────
         print(f"── LLM bulk review ({len(students_with_zips)} students, "
-              f"{bulk_runs} run(s)) ──")
+              f"{bulk_runs} run(s), split docs/code) ──")
 
         # Extract all zips to temp dirs.
         student_dirs = {}
@@ -299,31 +304,20 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             extract_submission(zip_files[student], build_dir)
             student_dirs[student] = build_dir
 
-        # Run N times with shuffled order.
-        all_run_results = []
-        for run_idx in range(1, bulk_runs + 1):
-            # Shuffle the student order for each run.
-            shuffled = list(student_dirs.items())
-            random.shuffle(shuffled)
-            shuffled_dirs = dict(shuffled)
-            order_str = ", ".join(shuffled_dirs.keys())
-
-            print(f"\n  Run {run_idx}/{bulk_runs}  "
-                  f"(order: {order_str})")
-            print(f"  Sending to {model}...")
-
+        def _bulk_call_with_retry(shuffled_dirs, call_mode, run_idx):
+            """Make a single bulk LLM call with rate-limit retry."""
+            print(f"\n  Run {run_idx}/{bulk_runs} [{call_mode}]")
             attempt = 0
             while True:
                 attempt += 1
                 try:
-                    t_llm_start = time.time()
-                    bulk_result = review_bulk(
+                    t0 = time.time()
+                    result = review_bulk(
                         shuffled_dirs, api_key=api_key, model=model,
-                        verbose=verbose,
+                        verbose=verbose, mode=call_mode,
                     )
-                    dt_llm = time.time() - t_llm_start
-                    print(f"  Response received ({dt_llm:.1f}s)")
-                    break
+                    print(f"  Response received ({time.time() - t0:.1f}s)")
+                    return result
                 except Exception as e:
                     err_str = str(e)
                     is_rate_limit = ("429" in err_str
@@ -336,9 +330,31 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                     else:
                         raise
 
+        # Run N times with shuffled order.
+        all_run_results = []  # list of merged {student: {item: ...}} dicts
+        for run_idx in range(1, bulk_runs + 1):
+            shuffled = list(student_dirs.items())
+            random.shuffle(shuffled)
+            shuffled_dirs = dict(shuffled)
+            order_preview = ", ".join(list(shuffled_dirs.keys())[:5])
+            if len(shuffled_dirs) > 5:
+                order_preview += f", ... ({len(shuffled_dirs)} total)"
+            print(f"\n  ── Run {run_idx}/{bulk_runs} ──  "
+                  f"(order: {order_preview})")
+
+            doc_result = _bulk_call_with_retry(shuffled_dirs, "docs", run_idx)
+            code_result = _bulk_call_with_retry(shuffled_dirs, "code", run_idx)
+
+            # Merge doc + code results per student.
+            merged = {}
+            for student in students_with_zips:
+                merged[student] = {}
+                merged[student].update(doc_result.get(student, {}))
+                merged[student].update(code_result.get(student, {}))
+
             # Print per-student summary for this run.
             for student in students_with_zips:
-                s_result = bulk_result.get(student, {})
+                s_result = merged.get(student, {})
                 passes = sum(
                     1 for item_id in RUBRIC_ITEMS
                     if isinstance(s_result.get(item_id), dict)
@@ -346,7 +362,7 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 )
                 print(f"    {student}: {passes}/{len(RUBRIC_ITEMS)} PASS")
 
-            all_run_results.append(bulk_result)
+            all_run_results.append(merged)
 
         # Clean up temp dirs.
         for d in temp_dirs:
@@ -900,6 +916,10 @@ def main():
              "repeated N times with shuffled order to check consistency "
              "(e.g. --bulk 3). Uses far fewer API calls."
     )
+    parser.add_argument(
+        "--skip-video", action="store_true",
+        help="Skip video analysis phase (LLM review only)"
+    )
 
     args = parser.parse_args()
 
@@ -972,6 +992,7 @@ def main():
             threshold_override=args.threshold,
             verbose=args.verbose_llm,
             bulk_runs=args.bulk,
+            skip_video=args.skip_video,
         )
         sys.exit(0)
 
