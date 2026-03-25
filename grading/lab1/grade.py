@@ -172,7 +172,8 @@ def _parse_rate_limit(err_str):
 
 def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 api_key=None, model=DEFAULT_MODEL,
-                threshold_override=None, verbose=False, bulk_runs=0):
+                threshold_override=None, verbose=False, bulk_runs=0,
+                skip_video=False):
     """
     Combined batch grading: LLM code review of zips + video analysis of
     pre-recorded videos, merged into a single CSV.
@@ -252,7 +253,9 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
     t_batch_start = time.time()
 
     # ── Phase 1: Video analysis ──────────────────────────────
-    if analyzer and video_files:
+    if skip_video:
+        print("── Video analysis: SKIPPED (--skip-video) ──\n")
+    elif analyzer and video_files:
         print("── Video analysis ──")
         for i, student in enumerate(all_students, 1):
             if student not in video_files:
@@ -900,6 +903,10 @@ def main():
              "repeated N times with shuffled order to check consistency "
              "(e.g. --bulk 3). Uses far fewer API calls."
     )
+    parser.add_argument(
+        "--skip-video", action="store_true",
+        help="Skip video analysis phase (LLM review only)"
+    )
 
     args = parser.parse_args()
 
@@ -972,6 +979,7 @@ def main():
             threshold_override=args.threshold,
             verbose=args.verbose_llm,
             bulk_runs=args.bulk,
+            skip_video=args.skip_video,
         )
         sys.exit(0)
 
