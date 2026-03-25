@@ -390,6 +390,8 @@ def review_submission(submission_dir, *, api_key=None, model=DEFAULT_MODEL,
         config=types.GenerateContentConfig(
             system_instruction=_SYSTEM_PROMPT,
             temperature=0.1,  # low temperature for consistent grading
+            max_output_tokens=65536,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
             response_mime_type="application/json",
         ),
     )
@@ -526,15 +528,31 @@ Rubric items:
         config=types.GenerateContentConfig(
             system_instruction=_SYSTEM_PROMPT,
             temperature=0.1,
+            max_output_tokens=65536,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
             response_mime_type="application/json",
         ),
     )
 
     raw = response.text
+    # Detect output truncation via finish_reason.
+    finish_reason = None
+    if response.candidates:
+        finish_reason = response.candidates[0].finish_reason
     if verbose:
         print("─── RAW RESPONSE ───")
+        print(f"  finish_reason: {finish_reason}")
         print(raw[:5000], "..." if len(raw) > 5000 else "")
         print("─── END RESPONSE ───\n")
+    if finish_reason and str(finish_reason).upper() in ("MAX_TOKENS", "2"):
+        dump_path = "bulk_response_raw.json"
+        with open(dump_path, "w") as df:
+            df.write(raw)
+        raise ValueError(
+            f"Gemini response truncated (finish_reason={finish_reason}, "
+            f"{len(raw):,} chars).  Too many students for one request.\n"
+            f"Raw response saved to {dump_path}"
+        )
 
     try:
         parsed = _parse_response(raw)
