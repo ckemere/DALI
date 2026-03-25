@@ -173,7 +173,7 @@ def _parse_rate_limit(err_str):
 def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 api_key=None, model=DEFAULT_MODEL,
                 threshold_override=None, verbose=False, bulk_runs=0,
-                skip_video=False):
+                skip_video=False, skip_llm=False):
     """
     Combined batch grading: LLM code review of zips + video analysis of
     pre-recorded videos, merged into a single CSV.
@@ -250,6 +250,23 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
     # Build row dicts keyed by student name.
     rows = {s: {"student": s} for s in all_students}
 
+    # If skipping LLM, pre-populate rows from existing CSV so we keep
+    # previously computed LLM columns.
+    if skip_llm and os.path.isfile(results_csv):
+        print(f"── Loading existing LLM results from {results_csv} ──")
+        with open(results_csv, "r", newline="") as f:
+            reader = csv.DictReader(f)
+            loaded = 0
+            for csv_row in reader:
+                name = csv_row.get("student", "")
+                if name in rows:
+                    # Copy all llm_* columns from old CSV.
+                    for k, v in csv_row.items():
+                        if k.startswith("llm_"):
+                            rows[name][k] = v
+                    loaded += 1
+        print(f"  Loaded LLM data for {loaded} students\n")
+
     t_batch_start = time.time()
 
     # ── Phase 1: Video analysis ──────────────────────────────
@@ -286,7 +303,11 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         print(f"Video phase done ({dt_video:.0f}s)\n")
 
     # ── Phase 2: LLM code review ─────────────────────────────
-    students_with_zips = [s for s in all_students if s in zip_files]
+    if skip_llm:
+        print("── LLM code review: SKIPPED (--skip-llm) ──\n")
+        students_with_zips = []
+    else:
+        students_with_zips = [s for s in all_students if s in zip_files]
 
     if students_with_zips and bulk_runs:
         # ── Bulk mode: all students in one request ────────────
@@ -907,6 +928,11 @@ def main():
         "--skip-video", action="store_true",
         help="Skip video analysis phase (LLM review only)"
     )
+    parser.add_argument(
+        "--skip-llm", action="store_true",
+        help="Skip LLM code review phase (video only); merges with "
+             "existing LLM columns from --results-csv if present"
+    )
 
     args = parser.parse_args()
 
@@ -963,7 +989,7 @@ def main():
             print(f"Error: {args.grade_batch} is not a directory")
             sys.exit(1)
         api_key = args.api_key or os.environ.get("GEMINI_API_KEY")
-        if not api_key:
+        if not api_key and not args.skip_llm:
             print("Error: set GEMINI_API_KEY or pass --api-key for code review")
             sys.exit(1)
         if args.calibration and not os.path.isfile(args.calibration):
@@ -980,6 +1006,7 @@ def main():
             verbose=args.verbose_llm,
             bulk_runs=args.bulk,
             skip_video=args.skip_video,
+            skip_llm=args.skip_llm,
         )
         sys.exit(0)
 
