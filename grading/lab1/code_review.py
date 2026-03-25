@@ -351,7 +351,140 @@ def review_submission(submission_dir, *, api_key=None, model=DEFAULT_MODEL,
     return results
 
 
-def format_results(results, *, use_color=True):
+def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
+                verbose=False):
+    """
+    Review multiple students in a single Gemini request.
+
+    Args:
+        student_dirs: dict mapping student name -> extracted submission dir.
+        api_key:      Gemini API key (defaults to GEMINI_API_KEY env var).
+        model:        Gemini model name.
+        verbose:      Print the prompt and raw response.
+
+    Returns:
+        dict mapping student name -> {rubric_item_id -> {verdict, reason, evidence}}
+    """
+    if not _GENAI_AVAILABLE:
+        raise RuntimeError(
+            "google-genai package is required.  Install with:\n"
+            "  pip install google-genai"
+        )
+
+    api_key = api_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Set GEMINI_API_KEY environment variable or pass api_key="
+        )
+
+    # Collect all artifacts, keyed by student name.
+    all_binary_parts = []  # uploaded PDF parts (shared across students)
+    student_sections = []
+
+    client = genai.Client(api_key=api_key)
+
+    for name, sdir in student_dirs.items():
+        code_files, doc_files = collect_artifacts(sdir)
+        if not code_files:
+            continue
+
+        binary_docs = {k: v for k, v in doc_files.items()
+                       if isinstance(v, str) and os.path.isfile(v)}
+        text_docs = {k: v for k, v in doc_files.items()
+                     if k not in binary_docs}
+
+        # Upload PDFs with student name in display_name for reference.
+        for rel_name, fpath in binary_docs.items():
+            ext = os.path.splitext(fpath)[1].lower()
+            if ext in (".pdf", ".doc", ".docx"):
+                try:
+                    uploaded = client.files.upload(file=fpath)
+                    all_binary_parts.append(uploaded)
+                    # Reference uploaded doc in the text section.
+                    text_docs[rel_name] = f"<see uploaded file: {rel_name}>"
+                except Exception as e:
+                    text_docs[rel_name] = f"<upload failed: {e}>"
+
+        # Build per-student text section.
+        section = [f"\n{'═' * 60}\n"]
+        section.append(f"STUDENT: {name}\n")
+        section.append(f"{'═' * 60}\n")
+
+        if text_docs:
+            section.append("── Design Document(s) ──\n")
+            for fname, content in sorted(text_docs.items()):
+                section.append(f"  [{fname}]\n{content}\n\n")
+        else:
+            section.append("── No design document found ──\n\n")
+
+        section.append("── Source Code ──\n")
+        for fname, content in sorted(code_files.items()):
+            section.append(f"  [{fname}]\n{content}\n\n")
+
+        student_sections.append("".join(section))
+
+    student_names = [n for n in student_dirs if any(
+        f"STUDENT: {n}" in s for s in student_sections)]
+
+    bulk_rubric_prompt = f"""\
+Evaluate EACH student's submission independently against EVERY rubric item.
+
+For each student and each rubric item, return:
+  "verdict": one of "PASS", "FAIL", or "UNCLEAR"
+  "reason":  one-sentence justification
+  "evidence": the most relevant quoted line(s) from THAT student's code
+
+Return a JSON object whose top-level keys are the student names exactly as
+shown (e.g. "alice", "bob"), and each value is an object whose keys are the
+rubric-item IDs listed below.
+
+Output ONLY valid JSON — no markdown fences, no commentary.
+
+Rubric items:
+─────────────
+"""
+    # Reuse the rubric item descriptions from _RUBRIC_PROMPT.
+    # Extract just the rubric items portion (after "Rubric items:\n─────────────\n")
+    rubric_items_text = _RUBRIC_PROMPT.split("Rubric items:\n─────────────\n", 1)[-1]
+    user_prompt = bulk_rubric_prompt + rubric_items_text + "\n\n"
+    user_prompt += "".join(student_sections)
+
+    prompt_size = len(user_prompt)
+    if verbose:
+        print("─── BULK PROMPT ───")
+        print(f"Prompt size: {prompt_size:,} chars, {len(student_dirs)} students")
+        print(user_prompt[:3000], "..." if len(user_prompt) > 3000 else "")
+        print("─── END PROMPT ───\n")
+    else:
+        print(f"  Prompt: {prompt_size:,} chars, {len(student_dirs)} students")
+
+    content_parts = list(all_binary_parts) + [user_prompt]
+
+    response = client.models.generate_content(
+        model=model,
+        contents=content_parts,
+        config=types.GenerateContentConfig(
+            system_instruction=_SYSTEM_PROMPT,
+            temperature=0.1,
+            response_mime_type="application/json",
+        ),
+    )
+
+    raw = response.text
+    if verbose:
+        print("─── RAW RESPONSE ───")
+        print(raw[:5000], "..." if len(raw) > 5000 else "")
+        print("─── END RESPONSE ───\n")
+
+    try:
+        parsed = _parse_response(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Could not parse Gemini bulk response as JSON: {e}\n"
+            f"Raw response (first 500 chars): {raw[:500]}"
+        )
+
+    return parsed
     """
     Pretty-print rubric results to a string.
 

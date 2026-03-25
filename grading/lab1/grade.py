@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -42,6 +43,7 @@ from grading.lab1.score import score, SCORE_FIELDS
 from grading.lab1.code_review import (
     RUBRIC_ITEMS,
     review_submission,
+    review_bulk,
     DEFAULT_MODEL,
 )
 
@@ -170,7 +172,7 @@ def _parse_rate_limit(err_str):
 
 def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 api_key=None, model=DEFAULT_MODEL,
-                threshold_override=None, verbose=False):
+                threshold_override=None, verbose=False, bulk_runs=0):
     """
     Combined batch grading: LLM code review of zips + video analysis of
     pre-recorded videos, merged into a single CSV.
@@ -187,6 +189,9 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         model:           Gemini model name.
         threshold_override: Optional brightness threshold override.
         verbose:         Print LLM prompts/responses.
+        bulk_runs:       If >0, send all students in a single LLM request,
+                         repeated this many times with shuffled order.
+                         Flags inconsistencies across runs.
     """
     import time
 
@@ -224,9 +229,12 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         print(f"Calibration: {calibration_path}")
         print(f"Thresholds: outer={analyzer.outer_threshold}  "
               f"inner={analyzer.inner_threshold}")
-    print(f"LLM model: {model}\n")
+    if bulk_runs:
+        print(f"LLM model: {model}  (bulk mode: {bulk_runs} run(s))\n")
+    else:
+        print(f"LLM model: {model}\n")
 
-    # ── Prepare CSV for incremental writes ─────────────────────
+    # ── Prepare CSV fields ────────────────────────────────────
     fieldnames = ["student"]
     fieldnames.extend(f"video_{k}" for k in SCORE_FIELDS)
     fieldnames.append("video_error")
@@ -234,31 +242,28 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         fieldnames.append(f"llm_{item_id}_verdict")
         fieldnames.append(f"llm_{item_id}_reason")
         fieldnames.append(f"llm_{item_id}_evidence")
+    if bulk_runs and bulk_runs > 1:
+        fieldnames.append("llm_inconsistencies")
     fieldnames.append("llm_error")
 
-    csv_file = open(results_csv, "w", newline="")
-    writer = csv.DictWriter(csv_file, fieldnames=fieldnames,
-                            extrasaction="ignore")
-    writer.writeheader()
-    csv_file.flush()
+    # Build row dicts keyed by student name.
+    rows = {s: {"student": s} for s in all_students}
 
-    rows = []
     t_batch_start = time.time()
-    for i, student in enumerate(all_students, 1):
-        t_student_start = time.time()
-        elapsed = t_student_start - t_batch_start
-        print(f"\n[{i}/{len(all_students)}] {student}  "
-              f"(elapsed {elapsed:.0f}s)")
-        row = {"student": student}
 
-        # ── Video analysis ────────────────────────────────────────
-        if student in video_files and analyzer:
-            print(f"  Video: analyzing {os.path.basename(video_files[student])}...")
+    # ── Phase 1: Video analysis ──────────────────────────────
+    if analyzer and video_files:
+        print("── Video analysis ──")
+        for i, student in enumerate(all_students, 1):
+            if student not in video_files:
+                continue
+            t0 = time.time()
+            print(f"  [{i}/{len(all_students)}] {student}...", end="", flush=True)
             try:
                 timeline = analyzer.extract_timeline(video_files[student])
                 scores, changes, _, _ = score(timeline)
                 for k, v in scores.items():
-                    row[f"video_{k}"] = v
+                    rows[student][f"video_{k}"] = v
 
                 changes_path = video_files[student].replace(
                     os.path.splitext(video_files[student])[1],
@@ -267,22 +272,133 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 with open(changes_path, "w") as cf:
                     json.dump(changes, cf, indent=1)
 
-                dt = time.time() - t_student_start
-                print(f"  Video: {scores.get('leds_activated', '?')} LEDs, "
-                      f"timing={scores.get('timing_1hz', '?')}, "
-                      f"inner_cw={scores.get('inner_clockwise_sequence', '?')}  "
-                      f"({dt:.1f}s)")
+                print(f"  {scores.get('leds_activated', '?')} LEDs, "
+                      f"timing={scores.get('timing_1hz', '?')}  "
+                      f"({time.time() - t0:.1f}s)")
             except Exception as e:
-                print(f"  Video: FAILED ({e})")
-                row["video_error"] = str(e)
-        elif student in video_files:
-            print(f"  Video: SKIPPED (no calibration)")
-        else:
-            print(f"  Video: no video found")
+                print(f"  FAILED ({e})")
+                rows[student]["video_error"] = str(e)
 
-        # ── LLM code review ───────────────────────────────────────
-        if student in zip_files:
-            print(f"  LLM:   sending to {model}...")
+        dt_video = time.time() - t_batch_start
+        print(f"Video phase done ({dt_video:.0f}s)\n")
+
+    # ── Phase 2: LLM code review ─────────────────────────────
+    students_with_zips = [s for s in all_students if s in zip_files]
+
+    if students_with_zips and bulk_runs:
+        # ── Bulk mode: all students in one request ────────────
+        print(f"── LLM bulk review ({len(students_with_zips)} students, "
+              f"{bulk_runs} run(s)) ──")
+
+        # Extract all zips to temp dirs.
+        student_dirs = {}
+        temp_dirs = []
+        for student in students_with_zips:
+            build_dir = tempfile.mkdtemp(prefix=f"review_{student}_")
+            temp_dirs.append(build_dir)
+            extract_submission(zip_files[student], build_dir)
+            student_dirs[student] = build_dir
+
+        # Run N times with shuffled order.
+        all_run_results = []
+        for run_idx in range(1, bulk_runs + 1):
+            # Shuffle the student order for each run.
+            shuffled = list(student_dirs.items())
+            random.shuffle(shuffled)
+            shuffled_dirs = dict(shuffled)
+            order_str = ", ".join(shuffled_dirs.keys())
+
+            print(f"\n  Run {run_idx}/{bulk_runs}  "
+                  f"(order: {order_str})")
+            print(f"  Sending to {model}...")
+
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    t_llm_start = time.time()
+                    bulk_result = review_bulk(
+                        shuffled_dirs, api_key=api_key, model=model,
+                        verbose=verbose,
+                    )
+                    dt_llm = time.time() - t_llm_start
+                    print(f"  Response received ({dt_llm:.1f}s)")
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    is_rate_limit = ("429" in err_str
+                                     or "RESOURCE_EXHAUSTED" in err_str)
+                    if is_rate_limit:
+                        retry_secs = _parse_rate_limit(err_str)
+                        wait = retry_secs + 5
+                        print(f"         (attempt {attempt})")
+                        time.sleep(wait)
+                    else:
+                        raise
+
+            # Print per-student summary for this run.
+            for student in students_with_zips:
+                s_result = bulk_result.get(student, {})
+                passes = sum(
+                    1 for item_id in RUBRIC_ITEMS
+                    if isinstance(s_result.get(item_id), dict)
+                    and s_result[item_id].get("verdict") == "PASS"
+                )
+                print(f"    {student}: {passes}/{len(RUBRIC_ITEMS)} PASS")
+
+            all_run_results.append(bulk_result)
+
+        # Clean up temp dirs.
+        for d in temp_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+
+        # ── Merge results: use first run, flag inconsistencies ──
+        print(f"\n── Consistency check ──")
+        for student in students_with_zips:
+            first = all_run_results[0].get(student, {})
+
+            # Store first run's results.
+            for item_id in RUBRIC_ITEMS:
+                entry = first.get(item_id, {})
+                if isinstance(entry, dict):
+                    rows[student][f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
+                    rows[student][f"llm_{item_id}_reason"] = entry.get("reason", "")
+                    rows[student][f"llm_{item_id}_evidence"] = entry.get("evidence", "")
+                else:
+                    rows[student][f"llm_{item_id}_verdict"] = "UNCLEAR"
+                    rows[student][f"llm_{item_id}_reason"] = str(entry)
+                    rows[student][f"llm_{item_id}_evidence"] = ""
+
+            # Check consistency across runs.
+            if bulk_runs > 1:
+                inconsistent = []
+                for item_id in RUBRIC_ITEMS:
+                    verdicts = set()
+                    for run_result in all_run_results:
+                        s_res = run_result.get(student, {})
+                        entry = s_res.get(item_id, {})
+                        v = entry.get("verdict", "MISSING") if isinstance(entry, dict) else "UNCLEAR"
+                        verdicts.add(v)
+                    if len(verdicts) > 1:
+                        inconsistent.append(
+                            f"{item_id}: {' vs '.join(sorted(verdicts))}"
+                        )
+
+                if inconsistent:
+                    rows[student]["llm_inconsistencies"] = "; ".join(inconsistent)
+                    print(f"  {student}: {len(inconsistent)} inconsistent item(s)")
+                    for desc in inconsistent:
+                        print(f"    {desc}")
+                else:
+                    print(f"  {student}: consistent")
+
+    elif students_with_zips:
+        # ── Per-student mode (original) ───────────────────────
+        print("── LLM per-student review ──")
+        for i, student in enumerate(students_with_zips, 1):
+            t_student_start = time.time()
+            print(f"\n  [{i}/{len(students_with_zips)}] {student}: "
+                  f"sending to {model}...")
             build_dir = tempfile.mkdtemp(prefix=f"review_{student}_")
             try:
                 extract_submission(zip_files[student], build_dir)
@@ -314,41 +430,38 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 for item_id in RUBRIC_ITEMS:
                     entry = llm_result.get(item_id, {})
                     if isinstance(entry, dict):
-                        row[f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
-                        row[f"llm_{item_id}_reason"] = entry.get("reason", "")
-                        row[f"llm_{item_id}_evidence"] = entry.get("evidence", "")
+                        rows[student][f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
+                        rows[student][f"llm_{item_id}_reason"] = entry.get("reason", "")
+                        rows[student][f"llm_{item_id}_evidence"] = entry.get("evidence", "")
                         if entry.get("verdict") == "PASS":
                             passes += 1
                     else:
-                        row[f"llm_{item_id}_verdict"] = "UNCLEAR"
-                        row[f"llm_{item_id}_reason"] = str(entry)
-                        row[f"llm_{item_id}_evidence"] = ""
+                        rows[student][f"llm_{item_id}_verdict"] = "UNCLEAR"
+                        rows[student][f"llm_{item_id}_reason"] = str(entry)
+                        rows[student][f"llm_{item_id}_evidence"] = ""
 
-                print(f"  LLM:   {passes}/{len(RUBRIC_ITEMS)} PASS  ({dt_llm:.1f}s)")
+                print(f"  {student}: {passes}/{len(RUBRIC_ITEMS)} PASS  ({dt_llm:.1f}s)")
             except Exception as e:
-                print(f"  LLM:   FAILED ({e})")
-                row["llm_error"] = str(e)
+                print(f"  {student}: FAILED ({e})")
+                rows[student]["llm_error"] = str(e)
             finally:
                 shutil.rmtree(build_dir, ignore_errors=True)
-        else:
-            print(f"  LLM:   no zip found")
 
-        rows.append(row)
-        writer.writerow(row)
-        csv_file.flush()
-
-        dt_total = time.time() - t_student_start
-        print(f"  Done   ({dt_total:.1f}s, CSV updated)")
-
-    csv_file.close()
+    # ── Write CSV ─────────────────────────────────────────────
+    row_list = [rows[s] for s in all_students]
+    with open(results_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames,
+                                extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(row_list)
     print(f"\nResults written to {results_csv}")
 
-    vid_ok = sum(1 for r in rows if any(
+    vid_ok = sum(1 for r in row_list if any(
         k.startswith("video_") and k != "video_error" for k in r))
-    llm_ok = sum(1 for r in rows if any(
+    llm_ok = sum(1 for r in row_list if any(
         k.startswith("llm_") and k != "llm_error" for k in r))
     total_time = time.time() - t_batch_start
-    print(f"\nSummary: {vid_ok} video + {llm_ok} LLM out of {len(rows)} students  "
+    print(f"\nSummary: {vid_ok} video + {llm_ok} LLM out of {len(row_list)} students  "
           f"({total_time:.0f}s total)")
 
 
@@ -781,6 +894,12 @@ def main():
         "--verbose-llm", action="store_true",
         help="Print LLM prompts and raw responses"
     )
+    parser.add_argument(
+        "--bulk", type=int, default=0, metavar="N",
+        help="Bulk LLM mode: send all students in one request, "
+             "repeated N times with shuffled order to check consistency "
+             "(e.g. --bulk 3). Uses far fewer API calls."
+    )
 
     args = parser.parse_args()
 
@@ -852,6 +971,7 @@ def main():
             model=args.model,
             threshold_override=args.threshold,
             verbose=args.verbose_llm,
+            bulk_runs=args.bulk,
         )
         sys.exit(0)
 
