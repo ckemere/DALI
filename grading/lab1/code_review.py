@@ -44,6 +44,7 @@ RUBRIC_ITEMS = [
     "design_doc_present",
     "diagram_included",
     "state_machine_explanation",
+    "writeup_matches_code",
     "code_commentary",
     "power_reset_gpio",
     "iomux_configuration",
@@ -107,53 +108,63 @@ Rubric items:
     Does the documentation textually explain the states (e.g., "State A
     turns on LED 1…")?  FAIL if no design document exists.
 
-4.  "code_commentary"
+4.  "writeup_matches_code"
+    Does the state machine or loop structure described in the design
+    document actually match the implementation in the C code?  Compare
+    the states, transitions, and overall control flow described in the
+    writeup against the actual main loop logic.  PASS if the writeup
+    is a reasonable description of what the code does.  FAIL if the
+    writeup describes a substantially different approach than what was
+    implemented, or if no design document exists.  In your reason,
+    briefly note any specific discrepancies you found.
+
+5.  "code_commentary"
     Are comments present in the C code explaining *why* specific hex
     values or registers are used?  (Not just trivial "include header"
     comments.)
 
-5.  "power_reset_gpio"
+6.  "power_reset_gpio"
     Does the code write to GPRCM.RSTCTL *and* GPRCM.PWREN for the
     appropriate GPIO module(s) (GPIOA and/or GPIOB)?
 
-6.  "iomux_configuration"
+7.  "iomux_configuration"
     Is the IOMUX->SECCFG.PINCM register configured for the specific pins
     used (with the correct function and IOMUX_PINCM_PC_CONNECTED)?
 
-7.  "output_enable_doe"
+8.  "output_enable_doe"
     Does the code enable the output driver (DOE) for the relevant pins
     using DOESET31_0 or by setting the DOE bits?
 
-8.  "safe_read_modify_write"
+9.  "safe_read_modify_write"
     Does the code use safe Read-Modify-Write logic (|= , &=~, or
     DOUTSET/DOUTCLR registers) or other techniques to avoid overwriting
     other potential pins on GPIOA?  Using DOUT31_0 = <value> that
     overwrites the entire port is a FAIL (unless the student explicitly
     accounts for all 32 bits).
 
-9.  "gpio_state_initialization"
+10. "gpio_state_initialization"
     Does the initialization set the default output value BEFORE enabling
     the output driver (DOE) so LEDs start OFF?
 
-10. "init_completeness_24_leds"
+11. "init_completeness_24_leds"
     Does the initialization code address all 24 LEDs (outer ring + inner
     ring)?  Look for IOMUX configuration of enough pins and DOE for all
     of them.
 
-11. "led_activation_logic"
+12. "led_activation_logic"
     To turn an LED ON, does the code use the correct polarity (1 for
     active-high, 0 for active-low, depending on hardware)?  The logic
     should be internally consistent.
 
-12. "infinite_loop"
+13. "infinite_loop"
     Is the main logic wrapped in a while(1), for(;;), or similar infinite
     loop structure?
 
-13. "data_structure_state_machine"
+14. "data_structure_state_machine"
     Does the code use a struct, array, enum, or switch-case to manage
     state rather than just linear if/else chains?
 
-14. "timing_delay"
+15. "timing_delay"
     Is there a delay mechanism (e.g. delay_cycles, __delay_cycles, or a
     busy-wait loop)?  Compute the expected delay from the code: identify
     the clock frequency (the MSPM0G3507 runs at 32 MHz by default) and
