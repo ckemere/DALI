@@ -58,6 +58,47 @@ RUBRIC_ITEMS = [
     "timing_delay",
 ]
 
+# Point value for each rubric item.  Edit weights here.
+# Items not listed default to 1 point.
+RUBRIC_POINTS = {
+    "design_doc_present":        1,
+    "diagram_included":          1,
+    "state_machine_explanation":  1,
+    "writeup_matches_code":      1,
+    "code_commentary":           1,
+    "power_reset_gpio":          1,
+    "iomux_configuration":       1,
+    "output_enable_doe":         1,
+    "safe_read_modify_write":    1,
+    "gpio_state_initialization": 1,
+    "init_completeness_24_leds": 1,
+    "led_activation_logic":      1,
+    "infinite_loop":             1,
+    "data_structure_state_machine": 1,
+    "timing_delay":              1,
+}
+
+# Human-readable descriptions for CSV headers / reports.
+RUBRIC_DESCRIPTIONS = {
+    "design_doc_present":        "Design document submitted",
+    "diagram_included":          "Diagram in design doc",
+    "state_machine_explanation":  "State machine explanation",
+    "writeup_matches_code":      "Writeup matches code",
+    "code_commentary":           "Code comments (why, not just what)",
+    "power_reset_gpio":          "GPIO power/reset (GPRCM)",
+    "iomux_configuration":       "IOMUX pin configuration",
+    "output_enable_doe":         "Output enable (DOE)",
+    "safe_read_modify_write":    "Safe read-modify-write",
+    "gpio_state_initialization": "GPIO state init before DOE",
+    "init_completeness_24_leds": "All 24 LEDs initialized",
+    "led_activation_logic":      "Correct LED on/off polarity",
+    "infinite_loop":             "Infinite loop structure",
+    "data_structure_state_machine": "State machine / data structure",
+    "timing_delay":              "Timing delay (~1 Hz)",
+}
+
+RUBRIC_MAX_POINTS = sum(RUBRIC_POINTS.get(k, 1) for k in RUBRIC_ITEMS)
+
 # Default Gemini model.  Flash is fast/cheap and sufficient for rubric
 # evaluation; students with unlimited academic licenses won't hit quotas.
 DEFAULT_MODEL = "gemini-2.5-flash"

@@ -42,6 +42,9 @@ from grading.video_analyzer import VideoAnalyzer
 from grading.lab1.score import score, SCORE_FIELDS
 from grading.lab1.code_review import (
     RUBRIC_ITEMS,
+    RUBRIC_POINTS,
+    RUBRIC_DESCRIPTIONS,
+    RUBRIC_MAX_POINTS,
     review_submission,
     review_bulk,
     DEFAULT_MODEL,
@@ -170,6 +173,33 @@ def _parse_rate_limit(err_str):
     return retry_secs
 
 
+def _store_llm_results(row, llm_result):
+    """Write LLM verdicts + points into a student's row dict.
+
+    Returns (points_earned, max_points).
+    """
+    total = 0
+    for item_id in RUBRIC_ITEMS:
+        pts = RUBRIC_POINTS.get(item_id, 1)
+        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
+        entry = llm_result.get(item_id, {})
+        if isinstance(entry, dict):
+            verdict = entry.get("verdict", "MISSING")
+            row[f"llm_{item_id}_verdict"] = verdict
+            row[f"llm_{item_id}_reason"] = entry.get("reason", "")
+            row[f"llm_{item_id}_evidence"] = entry.get("evidence", "")
+        else:
+            verdict = "UNCLEAR"
+            row[f"llm_{item_id}_verdict"] = verdict
+            row[f"llm_{item_id}_reason"] = str(entry)
+            row[f"llm_{item_id}_evidence"] = ""
+        earned = pts if verdict == "PASS" else 0
+        row[f"llm_{item_id}_points ({desc}, max {pts})"] = earned
+        total += earned
+    row[f"llm_total (max {RUBRIC_MAX_POINTS})"] = total
+    return total, RUBRIC_MAX_POINTS
+
+
 def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 api_key=None, model=DEFAULT_MODEL,
                 threshold_override=None, verbose=False, bulk_runs=0,
@@ -240,9 +270,13 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
     fieldnames.extend(f"video_{k}" for k in SCORE_FIELDS)
     fieldnames.append("video_error")
     for item_id in RUBRIC_ITEMS:
+        pts = RUBRIC_POINTS.get(item_id, 1)
+        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
         fieldnames.append(f"llm_{item_id}_verdict")
+        fieldnames.append(f"llm_{item_id}_points ({desc}, max {pts})")
         fieldnames.append(f"llm_{item_id}_reason")
         fieldnames.append(f"llm_{item_id}_evidence")
+    fieldnames.append(f"llm_total (max {RUBRIC_MAX_POINTS})")
     if bulk_runs and bulk_runs > 1:
         fieldnames.append("llm_inconsistencies")
     fieldnames.append("llm_error")
@@ -259,12 +293,28 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             loaded = 0
             for csv_row in reader:
                 name = csv_row.get("student", "")
-                if name in rows:
-                    # Copy all llm_* columns from old CSV.
-                    for k, v in csv_row.items():
-                        if k.startswith("llm_"):
-                            rows[name][k] = v
+                if name not in rows:
+                    continue
+                # Reconstruct an llm_result dict from the old CSV
+                # verdicts so _store_llm_results can recompute points.
+                llm_result = {}
+                for item_id in RUBRIC_ITEMS:
+                    verdict = csv_row.get(f"llm_{item_id}_verdict", "")
+                    reason = csv_row.get(f"llm_{item_id}_reason", "")
+                    evidence = csv_row.get(f"llm_{item_id}_evidence", "")
+                    if verdict:
+                        llm_result[item_id] = {
+                            "verdict": verdict,
+                            "reason": reason,
+                            "evidence": evidence,
+                        }
+                if llm_result:
+                    _store_llm_results(rows[name], llm_result)
                     loaded += 1
+                # Also preserve error/inconsistency columns.
+                for k, v in csv_row.items():
+                    if k in ("llm_error", "llm_inconsistencies") and v:
+                        rows[name][k] = v
         print(f"  Loaded LLM data for {loaded} students\n")
 
     t_batch_start = time.time()
@@ -363,12 +413,13 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             # Print per-student summary for this run.
             for student in students_with_zips:
                 s_result = bulk_result.get(student, {})
-                passes = sum(
-                    1 for item_id in RUBRIC_ITEMS
+                earned = sum(
+                    RUBRIC_POINTS.get(item_id, 1)
+                    for item_id in RUBRIC_ITEMS
                     if isinstance(s_result.get(item_id), dict)
                     and s_result[item_id].get("verdict") == "PASS"
                 )
-                print(f"    {student}: {passes}/{len(RUBRIC_ITEMS)} PASS")
+                print(f"    {student}: {earned}/{RUBRIC_MAX_POINTS} pts")
 
             all_run_results.append(bulk_result)
 
@@ -382,16 +433,7 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             first = all_run_results[0].get(student, {})
 
             # Store first run's results.
-            for item_id in RUBRIC_ITEMS:
-                entry = first.get(item_id, {})
-                if isinstance(entry, dict):
-                    rows[student][f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
-                    rows[student][f"llm_{item_id}_reason"] = entry.get("reason", "")
-                    rows[student][f"llm_{item_id}_evidence"] = entry.get("evidence", "")
-                else:
-                    rows[student][f"llm_{item_id}_verdict"] = "UNCLEAR"
-                    rows[student][f"llm_{item_id}_reason"] = str(entry)
-                    rows[student][f"llm_{item_id}_evidence"] = ""
+            earned, max_pts = _store_llm_results(rows[student], first)
 
             # Check consistency across runs.
             if bulk_runs > 1:
@@ -450,21 +492,9 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                             raise  # non-retryable error
 
                 dt_llm = time.time() - t_llm_start
-                passes = 0
-                for item_id in RUBRIC_ITEMS:
-                    entry = llm_result.get(item_id, {})
-                    if isinstance(entry, dict):
-                        rows[student][f"llm_{item_id}_verdict"] = entry.get("verdict", "MISSING")
-                        rows[student][f"llm_{item_id}_reason"] = entry.get("reason", "")
-                        rows[student][f"llm_{item_id}_evidence"] = entry.get("evidence", "")
-                        if entry.get("verdict") == "PASS":
-                            passes += 1
-                    else:
-                        rows[student][f"llm_{item_id}_verdict"] = "UNCLEAR"
-                        rows[student][f"llm_{item_id}_reason"] = str(entry)
-                        rows[student][f"llm_{item_id}_evidence"] = ""
+                earned, max_pts = _store_llm_results(rows[student], llm_result)
 
-                print(f"  {student}: {passes}/{len(RUBRIC_ITEMS)} PASS  ({dt_llm:.1f}s)")
+                print(f"  {student}: {earned}/{max_pts} pts  ({dt_llm:.1f}s)")
             except Exception as e:
                 print(f"  {student}: FAILED ({e})")
                 rows[student]["llm_error"] = str(e)
