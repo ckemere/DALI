@@ -125,6 +125,49 @@ def analyze_videos(video_dir, calibration_path, results_csv,
     print(f"\nSummary: {analyzed}/{len(results)} analyzed successfully")
 
 
+def _parse_rate_limit(err_str):
+    """Parse a Gemini 429 error and print quota details.
+
+    Returns the retry delay in seconds (from the error, or 55s default).
+    """
+    # retryDelay — may appear as JSON ("retryDelay": "37s") or
+    # Python repr ('retryDelay': '37s') or inline text ("retry in 37.06s")
+    retry_secs = None
+    m = re.search(r"['\"]retryDelay['\"]:\s*['\"](\d+)s?['\"]", err_str)
+    if m:
+        retry_secs = float(m.group(1))
+    else:
+        m = re.search(r'retry\w*\s+in\s+([\d.]+)s', err_str, re.IGNORECASE)
+        if m:
+            retry_secs = float(m.group(1))
+
+    # quotaValue / quotaId
+    quota_limit = None
+    quota_id = None
+    m = re.search(r"['\"]quotaValue['\"]:\s*['\"](\d+)['\"]", err_str)
+    if m:
+        quota_limit = m.group(1)
+    m = re.search(r"['\"]quotaId['\"]:\s*['\"]([^'\"]+)['\"]", err_str)
+    if m:
+        quota_id = m.group(1)
+
+    # Print what we found
+    parts = ["  LLM:   rate limited"]
+    if quota_limit:
+        parts.append(f" — quota: {quota_limit} requests")
+        if quota_id:
+            parts.append(f" ({quota_id})")
+    print("".join(parts))
+
+    if retry_secs is None:
+        retry_secs = 55.0
+        print(f"         could not parse retry delay, defaulting to {retry_secs:.0f}s")
+    else:
+        print(f"         API requested retry in {retry_secs:.0f}s, "
+              f"waiting {retry_secs + 5:.0f}s...")
+    return retry_secs
+
+
 def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 api_key=None, model=DEFAULT_MODEL,
                 threshold_override=None, verbose=False):
@@ -259,12 +302,9 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                         is_rate_limit = ("429" in err_str
                                          or "RESOURCE_EXHAUSTED" in err_str)
                         if is_rate_limit:
-                            # Parse retry delay from error message
-                            m = re.search(r'retry\w*\s+in\s+([\d.]+)s',
-                                          err_str, re.IGNORECASE)
-                            wait = float(m.group(1)) + 5 if m else 60.0
-                            print(f"  LLM:   rate limited (attempt {attempt}), "
-                                  f"waiting {wait:.0f}s...")
+                            retry_secs = _parse_rate_limit(err_str)
+                            wait = retry_secs + 5
+                            print(f"         (attempt {attempt})")
                             time.sleep(wait)
                         else:
                             raise  # non-retryable error
