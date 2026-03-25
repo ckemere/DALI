@@ -57,28 +57,6 @@ RUBRIC_ITEMS = [
     "timing_delay",
 ]
 
-# Items that only need the design document.
-DOC_RUBRIC_ITEMS = [
-    "design_doc_present",
-    "diagram_included",
-    "state_machine_explanation",
-]
-
-# Items that only need source code.
-CODE_RUBRIC_ITEMS = [
-    "code_commentary",
-    "power_reset_gpio",
-    "iomux_configuration",
-    "output_enable_doe",
-    "safe_read_modify_write",
-    "gpio_state_initialization",
-    "init_completeness_24_leds",
-    "led_activation_logic",
-    "infinite_loop",
-    "data_structure_state_machine",
-    "timing_delay",
-]
-
 # Default Gemini model.  Flash is fast/cheap and sufficient for rubric
 # evaluation; students with unlimited academic licenses won't hit quotas.
 DEFAULT_MODEL = "gemini-2.5-flash"
@@ -102,7 +80,7 @@ Students submit:
      GPIOB, IOMUX, GPRCM, etc.).
 """
 
-_RUBRIC_PREAMBLE = """\
+_RUBRIC_PROMPT = """\
 Evaluate the following student submission against EVERY rubric item below.
 For EACH item, return a JSON object with three fields:
   "verdict": one of "PASS", "FAIL", or "UNCLEAR"
@@ -115,9 +93,6 @@ listed below.  Output ONLY valid JSON — no markdown fences, no commentary.
 
 Rubric items:
 ─────────────
-"""
-
-_DOC_RUBRIC_TEXT = """\
 1.  "design_doc_present"
     Did the student submit a separate text or PDF file explaining their
     design approach?  (Look for any .txt, .pdf, .md, or .docx file that
@@ -131,56 +106,54 @@ _DOC_RUBRIC_TEXT = """\
 3.  "state_machine_explanation"
     Does the documentation textually explain the states (e.g., "State A
     turns on LED 1…")?  FAIL if no design document exists.
-"""
 
-_CODE_RUBRIC_TEXT = """\
-1.  "code_commentary"
+4.  "code_commentary"
     Are comments present in the C code explaining *why* specific hex
     values or registers are used?  (Not just trivial "include header"
     comments.)
 
-2.  "power_reset_gpio"
+5.  "power_reset_gpio"
     Does the code write to GPRCM.RSTCTL *and* GPRCM.PWREN for the
     appropriate GPIO module(s) (GPIOA and/or GPIOB)?
 
-3.  "iomux_configuration"
+6.  "iomux_configuration"
     Is the IOMUX->SECCFG.PINCM register configured for the specific pins
     used (with the correct function and IOMUX_PINCM_PC_CONNECTED)?
 
-4.  "output_enable_doe"
+7.  "output_enable_doe"
     Does the code enable the output driver (DOE) for the relevant pins
     using DOESET31_0 or by setting the DOE bits?
 
-5.  "safe_read_modify_write"
+8.  "safe_read_modify_write"
     Does the code use safe Read-Modify-Write logic (|= , &=~, or
     DOUTSET/DOUTCLR registers) or other techniques to avoid overwriting
     other potential pins on GPIOA?  Using DOUT31_0 = <value> that
     overwrites the entire port is a FAIL (unless the student explicitly
     accounts for all 32 bits).
 
-6.  "gpio_state_initialization"
+9.  "gpio_state_initialization"
     Does the initialization set the default output value BEFORE enabling
     the output driver (DOE) so LEDs start OFF?
 
-7.  "init_completeness_24_leds"
+10. "init_completeness_24_leds"
     Does the initialization code address all 24 LEDs (outer ring + inner
     ring)?  Look for IOMUX configuration of enough pins and DOE for all
     of them.
 
-8.  "led_activation_logic"
+11. "led_activation_logic"
     To turn an LED ON, does the code use the correct polarity (1 for
     active-high, 0 for active-low, depending on hardware)?  The logic
     should be internally consistent.
 
-9.  "infinite_loop"
+12. "infinite_loop"
     Is the main logic wrapped in a while(1), for(;;), or similar infinite
     loop structure?
 
-10. "data_structure_state_machine"
+13. "data_structure_state_machine"
     Does the code use a struct, array, enum, or switch-case to manage
     state rather than just linear if/else chains?
 
-11. "timing_delay"
+14. "timing_delay"
     Is there a delay mechanism (e.g. delay_cycles, __delay_cycles, or a
     busy-wait loop)?  Compute the expected delay from the code: identify
     the clock frequency (the MSPM0G3507 runs at 32 MHz by default) and
@@ -189,9 +162,6 @@ _CODE_RUBRIC_TEXT = """\
     PASS if the computed delay is between 0.5 s and 2.0 s; FAIL
     otherwise (or if no delay mechanism is found).
 """
-
-# Combined prompt for single-student review (backwards compat).
-_RUBRIC_PROMPT = _RUBRIC_PREAMBLE + _DOC_RUBRIC_TEXT + _CODE_RUBRIC_TEXT
 
 
 def collect_artifacts(submission_dir):
@@ -382,7 +352,7 @@ def review_submission(submission_dir, *, api_key=None, model=DEFAULT_MODEL,
 
 
 def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
-                verbose=False, mode="all"):
+                verbose=False):
     """
     Review multiple students in a single Gemini request.
 
@@ -391,9 +361,6 @@ def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
         api_key:      Gemini API key (defaults to GEMINI_API_KEY env var).
         model:        Gemini model name.
         verbose:      Print the prompt and raw response.
-        mode:         "docs" — only design-document rubric items,
-                      "code" — only source-code rubric items,
-                      "all"  — both (original behaviour).
 
     Returns:
         dict mapping student name -> {rubric_item_id -> {verdict, reason, evidence}}
@@ -410,35 +377,15 @@ def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
             "Set GEMINI_API_KEY environment variable or pass api_key="
         )
 
-    # Select rubric items and prompt text based on mode.
-    if mode == "docs":
-        rubric_text = _DOC_RUBRIC_TEXT
-        include_code = False
-        include_docs = True
-    elif mode == "code":
-        rubric_text = _CODE_RUBRIC_TEXT
-        include_code = True
-        include_docs = False
-    else:
-        rubric_text = _DOC_RUBRIC_TEXT + _CODE_RUBRIC_TEXT
-        include_code = True
-        include_docs = True
-
     # Collect all artifacts, keyed by student name.
-    all_binary_parts = []
+    all_binary_parts = []  # uploaded PDF parts (shared across students)
     student_sections = []
 
     client = genai.Client(api_key=api_key)
 
     for name, sdir in student_dirs.items():
         code_files, doc_files = collect_artifacts(sdir)
-
-        # Skip students with no relevant artifacts.
-        if include_code and not code_files and not include_docs:
-            continue
-        if include_docs and not doc_files and not include_code:
-            continue
-        if not code_files and not doc_files:
+        if not code_files:
             continue
 
         binary_docs = {k: v for k, v in doc_files.items()
@@ -446,44 +393,46 @@ def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
         text_docs = {k: v for k, v in doc_files.items()
                      if k not in binary_docs}
 
+        # Upload PDFs with student name in display_name for reference.
+        for rel_name, fpath in binary_docs.items():
+            ext = os.path.splitext(fpath)[1].lower()
+            if ext in (".pdf", ".doc", ".docx"):
+                try:
+                    uploaded = client.files.upload(file=fpath)
+                    all_binary_parts.append(uploaded)
+                    # Reference uploaded doc in the text section.
+                    text_docs[rel_name] = f"<see uploaded file: {rel_name}>"
+                except Exception as e:
+                    text_docs[rel_name] = f"<upload failed: {e}>"
+
         # Build per-student text section.
         section = [f"\n{'═' * 60}\n"]
         section.append(f"STUDENT: {name}\n")
         section.append(f"{'═' * 60}\n")
 
-        if include_docs:
-            # Upload PDFs for this student.
-            for rel_name, fpath in binary_docs.items():
-                ext = os.path.splitext(fpath)[1].lower()
-                if ext in (".pdf", ".doc", ".docx"):
-                    try:
-                        uploaded = client.files.upload(file=fpath)
-                        all_binary_parts.append(uploaded)
-                        text_docs[rel_name] = f"<see uploaded file: {rel_name}>"
-                    except Exception as e:
-                        text_docs[rel_name] = f"<upload failed: {e}>"
-
-            if text_docs:
-                section.append("── Design Document(s) ──\n")
-                for fname, content in sorted(text_docs.items()):
-                    section.append(f"  [{fname}]\n{content}\n\n")
-            else:
-                section.append("── No design document found ──\n\n")
-
-        if include_code:
-            section.append("── Source Code ──\n")
-            for fname, content in sorted(code_files.items()):
+        if text_docs:
+            section.append("── Design Document(s) ──\n")
+            for fname, content in sorted(text_docs.items()):
                 section.append(f"  [{fname}]\n{content}\n\n")
+        else:
+            section.append("── No design document found ──\n\n")
+
+        section.append("── Source Code ──\n")
+        for fname, content in sorted(code_files.items()):
+            section.append(f"  [{fname}]\n{content}\n\n")
 
         student_sections.append("".join(section))
 
-    bulk_rubric_prompt = """\
+    student_names = [n for n in student_dirs if any(
+        f"STUDENT: {n}" in s for s in student_sections)]
+
+    bulk_rubric_prompt = f"""\
 Evaluate EACH student's submission independently against EVERY rubric item.
 
 For each student and each rubric item, return:
   "verdict": one of "PASS", "FAIL", or "UNCLEAR"
   "reason":  one-sentence justification
-  "evidence": the most relevant quoted line(s) from THAT student's submission
+  "evidence": the most relevant quoted line(s) from THAT student's code
 
 Return a JSON object whose top-level keys are the student names exactly as
 shown (e.g. "alice", "bob"), and each value is an object whose keys are the
@@ -494,18 +443,20 @@ Output ONLY valid JSON — no markdown fences, no commentary.
 Rubric items:
 ─────────────
 """
-    user_prompt = bulk_rubric_prompt + rubric_text + "\n\n"
+    # Reuse the rubric item descriptions from _RUBRIC_PROMPT.
+    # Extract just the rubric items portion (after "Rubric items:\n─────────────\n")
+    rubric_items_text = _RUBRIC_PROMPT.split("Rubric items:\n─────────────\n", 1)[-1]
+    user_prompt = bulk_rubric_prompt + rubric_items_text + "\n\n"
     user_prompt += "".join(student_sections)
 
     prompt_size = len(user_prompt)
     if verbose:
-        print(f"─── BULK PROMPT ({mode}) ───")
+        print("─── BULK PROMPT ───")
         print(f"Prompt size: {prompt_size:,} chars, {len(student_dirs)} students")
         print(user_prompt[:3000], "..." if len(user_prompt) > 3000 else "")
         print("─── END PROMPT ───\n")
     else:
-        print(f"  Prompt ({mode}): {prompt_size:,} chars, "
-              f"{len(student_dirs)} students")
+        print(f"  Prompt: {prompt_size:,} chars, {len(student_dirs)} students")
 
     content_parts = list(all_binary_parts) + [user_prompt]
 
@@ -521,7 +472,7 @@ Rubric items:
 
     raw = response.text
     if verbose:
-        print(f"─── RAW RESPONSE ({mode}) ───")
+        print("─── RAW RESPONSE ───")
         print(raw[:5000], "..." if len(raw) > 5000 else "")
         print("─── END RESPONSE ───\n")
 
@@ -534,9 +485,6 @@ Rubric items:
         )
 
     return parsed
-
-
-def format_results(results, *, use_color=True):
     """
     Pretty-print rubric results to a string.
 
