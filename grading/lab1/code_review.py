@@ -239,12 +239,61 @@ def _build_user_prompt(code_files, doc_files):
 def _parse_response(text):
     """
     Extract the JSON object from Gemini's response.
-    Handles optional markdown code fences.
+    Handles optional markdown code fences and common JSON errors.
     """
     # Strip markdown fences if present.
     cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip())
     cleaned = re.sub(r"\s*```$", "", cleaned)
-    return json.loads(cleaned)
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Common LLM JSON issues: trailing commas before } or ]
+    fixed = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # Truncated response: try to close open braces/brackets.
+    # Count unmatched openers.
+    depth_brace = 0
+    depth_bracket = 0
+    in_string = False
+    escape = False
+    for ch in fixed:
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth_brace += 1
+        elif ch == '}':
+            depth_brace -= 1
+        elif ch == '[':
+            depth_bracket += 1
+        elif ch == ']':
+            depth_bracket -= 1
+
+    # If we're inside a string (unmatched quote), close it.
+    if in_string:
+        fixed += '"'
+    # Append missing closing tokens.
+    fixed += ']' * max(0, depth_bracket)
+    fixed += '}' * max(0, depth_brace)
+    # Remove trailing commas again after our additions.
+    fixed = re.sub(r",\s*([}\]])", r"\1", fixed)
+
+    return json.loads(fixed)
 
 
 def _upload_binary_docs(client, doc_files):
@@ -479,12 +528,20 @@ Rubric items:
     try:
         parsed = _parse_response(raw)
     except json.JSONDecodeError as e:
+        # Save raw response so the user doesn't lose the data.
+        dump_path = "bulk_response_raw.json"
+        with open(dump_path, "w") as df:
+            df.write(raw)
         raise ValueError(
             f"Could not parse Gemini bulk response as JSON: {e}\n"
-            f"Raw response (first 500 chars): {raw[:500]}"
+            f"Raw response saved to {dump_path} ({len(raw):,} chars)\n"
+            f"First 500 chars: {raw[:500]}"
         )
 
     return parsed
+
+
+def format_results(results, *, use_color=True):
     """
     Pretty-print rubric results to a string.
 
