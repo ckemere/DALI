@@ -416,7 +416,8 @@ def review_submission(submission_dir, *, api_key=None, model=DEFAULT_MODEL,
 def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
                 verbose=False):
     """
-    Review multiple students in a single Gemini request.
+    Review multiple students via Gemini, auto-chunking to avoid output
+    token limits.
 
     Args:
         student_dirs: dict mapping student name -> extracted submission dir.
@@ -439,11 +440,11 @@ def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
             "Set GEMINI_API_KEY environment variable or pass api_key="
         )
 
-    # Collect all artifacts, keyed by student name.
-    all_binary_parts = []  # uploaded PDF parts (shared across students)
-    student_sections = []
-
     client = genai.Client(api_key=api_key)
+
+    # ── Collect artifacts and build per-student text sections ──
+    student_sections = {}   # name -> section text
+    all_binary_parts = []   # uploaded PDF parts
 
     for name, sdir in student_dirs.items():
         code_files, doc_files = collect_artifacts(sdir)
@@ -455,19 +456,16 @@ def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
         text_docs = {k: v for k, v in doc_files.items()
                      if k not in binary_docs}
 
-        # Upload PDFs with student name in display_name for reference.
         for rel_name, fpath in binary_docs.items():
             ext = os.path.splitext(fpath)[1].lower()
             if ext in (".pdf", ".doc", ".docx"):
                 try:
                     uploaded = client.files.upload(file=fpath)
                     all_binary_parts.append(uploaded)
-                    # Reference uploaded doc in the text section.
                     text_docs[rel_name] = f"<see uploaded file: {rel_name}>"
                 except Exception as e:
                     text_docs[rel_name] = f"<upload failed: {e}>"
 
-        # Build per-student text section.
         section = [f"\n{'═' * 60}\n"]
         section.append(f"STUDENT: {name}\n")
         section.append(f"{'═' * 60}\n")
@@ -483,12 +481,14 @@ def review_bulk(student_dirs, *, api_key=None, model=DEFAULT_MODEL,
         for fname, content in sorted(code_files.items()):
             section.append(f"  [{fname}]\n{content}\n\n")
 
-        student_sections.append("".join(section))
+        student_sections[name] = "".join(section)
 
-    student_names = [n for n in student_dirs if any(
-        f"STUDENT: {n}" in s for s in student_sections)]
+    # ── Build the rubric preamble (shared across chunks) ──
+    rubric_items_text = _RUBRIC_PROMPT.split(
+        "Rubric items:\n─────────────\n", 1)[-1]
 
-    bulk_rubric_prompt = f"""\
+    def _make_bulk_prompt(names):
+        header = """\
 Evaluate EACH student's submission independently against EVERY rubric item.
 
 For each student and each rubric item, return:
@@ -505,69 +505,87 @@ Output ONLY valid JSON — no markdown fences, no commentary.
 Rubric items:
 ─────────────
 """
-    # Reuse the rubric item descriptions from _RUBRIC_PROMPT.
-    # Extract just the rubric items portion (after "Rubric items:\n─────────────\n")
-    rubric_items_text = _RUBRIC_PROMPT.split("Rubric items:\n─────────────\n", 1)[-1]
-    user_prompt = bulk_rubric_prompt + rubric_items_text + "\n\n"
-    user_prompt += "".join(student_sections)
+        parts = [header, rubric_items_text, "\n\n"]
+        for n in names:
+            parts.append(student_sections[n])
+        return "".join(parts)
 
-    prompt_size = len(user_prompt)
-    if verbose:
-        print("─── BULK PROMPT ───")
-        print(f"Prompt size: {prompt_size:,} chars, {len(student_dirs)} students")
-        print(user_prompt[:3000], "..." if len(user_prompt) > 3000 else "")
-        print("─── END PROMPT ───\n")
-    else:
-        print(f"  Prompt: {prompt_size:,} chars, {len(student_dirs)} students")
+    # ── Auto-chunk: ~10 students per request ──
+    # At ~5K chars output per student, 10 students ≈ 50K chars ≈ 13K tokens,
+    # well within the 65K output token limit.
+    MAX_STUDENTS_PER_CHUNK = 10
+    all_names = list(student_sections.keys())
+    chunks = [all_names[i:i + MAX_STUDENTS_PER_CHUNK]
+              for i in range(0, len(all_names), MAX_STUDENTS_PER_CHUNK)]
 
-    content_parts = list(all_binary_parts) + [user_prompt]
+    merged_results = {}
 
-    response = client.models.generate_content(
-        model=model,
-        contents=content_parts,
-        config=types.GenerateContentConfig(
-            system_instruction=_SYSTEM_PROMPT,
-            temperature=0.1,
-            max_output_tokens=65536,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-            response_mime_type="application/json",
-        ),
-    )
+    for chunk_idx, chunk_names in enumerate(chunks, 1):
+        user_prompt = _make_bulk_prompt(chunk_names)
+        prompt_size = len(user_prompt)
 
-    raw = response.text
-    # Detect output truncation via finish_reason.
-    finish_reason = None
-    if response.candidates:
-        finish_reason = response.candidates[0].finish_reason
-    if verbose:
-        print("─── RAW RESPONSE ───")
-        print(f"  finish_reason: {finish_reason}")
-        print(raw[:5000], "..." if len(raw) > 5000 else "")
-        print("─── END RESPONSE ───\n")
-    if finish_reason and str(finish_reason).upper() in ("MAX_TOKENS", "2"):
-        dump_path = "bulk_response_raw.json"
-        with open(dump_path, "w") as df:
-            df.write(raw)
-        raise ValueError(
-            f"Gemini response truncated (finish_reason={finish_reason}, "
-            f"{len(raw):,} chars).  Too many students for one request.\n"
-            f"Raw response saved to {dump_path}"
+        chunk_label = (f"chunk {chunk_idx}/{len(chunks)}, "
+                       f"{len(chunk_names)} students"
+                       if len(chunks) > 1 else
+                       f"{len(chunk_names)} students")
+
+        if verbose:
+            print(f"─── BULK PROMPT ({chunk_label}) ───")
+            print(f"Prompt size: {prompt_size:,} chars")
+            print(user_prompt[:3000], "..." if len(user_prompt) > 3000 else "")
+            print("─── END PROMPT ───\n")
+        else:
+            print(f"  Prompt: {prompt_size:,} chars, {chunk_label}")
+
+        content_parts = list(all_binary_parts) + [user_prompt]
+
+        response = client.models.generate_content(
+            model=model,
+            contents=content_parts,
+            config=types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                temperature=0.1,
+                max_output_tokens=65536,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                response_mime_type="application/json",
+            ),
         )
 
-    try:
-        parsed = _parse_response(raw)
-    except json.JSONDecodeError as e:
-        # Save raw response so the user doesn't lose the data.
-        dump_path = "bulk_response_raw.json"
-        with open(dump_path, "w") as df:
-            df.write(raw)
-        raise ValueError(
-            f"Could not parse Gemini bulk response as JSON: {e}\n"
-            f"Raw response saved to {dump_path} ({len(raw):,} chars)\n"
-            f"First 500 chars: {raw[:500]}"
-        )
+        raw = response.text
+        # Detect output truncation via finish_reason.
+        finish_reason = None
+        if response.candidates:
+            finish_reason = response.candidates[0].finish_reason
+        if verbose:
+            print("─── RAW RESPONSE ───")
+            print(f"  finish_reason: {finish_reason}")
+            print(raw[:5000], "..." if len(raw) > 5000 else "")
+            print("─── END RESPONSE ───\n")
+        if finish_reason and str(finish_reason).upper() in ("MAX_TOKENS", "2"):
+            dump_path = f"bulk_response_raw_chunk{chunk_idx}.json"
+            with open(dump_path, "w") as df:
+                df.write(raw)
+            raise ValueError(
+                f"Gemini response truncated ({chunk_label}, "
+                f"finish_reason={finish_reason}, {len(raw):,} chars).\n"
+                f"Raw response saved to {dump_path}"
+            )
 
-    return parsed
+        try:
+            parsed = _parse_response(raw)
+        except json.JSONDecodeError as e:
+            dump_path = f"bulk_response_raw_chunk{chunk_idx}.json"
+            with open(dump_path, "w") as df:
+                df.write(raw)
+            raise ValueError(
+                f"Could not parse Gemini bulk response as JSON ({chunk_label}): {e}\n"
+                f"Raw response saved to {dump_path} ({len(raw):,} chars)\n"
+                f"First 500 chars: {raw[:500]}"
+            )
+
+        merged_results.update(parsed)
+
+    return merged_results
 
 
 def format_results(results, *, use_color=True):
