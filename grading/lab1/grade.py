@@ -200,10 +200,73 @@ def _store_llm_results(row, llm_result):
     return total, RUBRIC_MAX_POINTS
 
 
+def generate_report(student, row, report_path):
+    """Write a per-student grade report text file."""
+    lines = []
+    lines.append(f"ELEC 327 — Lab 1 Grade Report")
+    lines.append(f"Student: {student}")
+    lines.append(f"{'=' * 60}\n")
+
+    # Rubric summary table
+    lines.append("RUBRIC SUMMARY")
+    lines.append(f"{'-' * 60}")
+    lines.append(f"{'Item':<45} {'Pts':>4}  {'Max':>4}  Verdict")
+    lines.append(f"{'-' * 60}")
+
+    total_earned = 0
+    for item_id in RUBRIC_ITEMS:
+        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
+        max_pts = RUBRIC_POINTS.get(item_id, 1)
+        verdict = row.get(f"llm_{item_id}_verdict", "")
+        earned = max_pts if verdict == "PASS" else 0
+        total_earned += earned
+        lines.append(f"{desc:<45} {earned:>4}  {max_pts:>4}  {verdict}")
+
+    lines.append(f"{'-' * 60}")
+    lines.append(f"{'TOTAL':<45} {total_earned:>4}  {RUBRIC_MAX_POINTS:>4}")
+    lines.append("")
+
+    # Detailed findings
+    lines.append(f"\nDETAILED FINDINGS")
+    lines.append(f"{'=' * 60}")
+    for item_id in RUBRIC_ITEMS:
+        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
+        verdict = row.get(f"llm_{item_id}_verdict", "")
+        reason = row.get(f"llm_{item_id}_reason", "")
+        evidence = row.get(f"llm_{item_id}_evidence", "")
+
+        lines.append(f"\n{desc}")
+        lines.append(f"  Verdict: {verdict}")
+        if reason:
+            lines.append(f"  Reason:  {reason}")
+        if evidence:
+            lines.append(f"  Evidence:")
+            for eline in str(evidence).split("\n"):
+                lines.append(f"    > {eline}")
+
+    # Video results (if present)
+    video_keys = [k for k in row if k.startswith("video_") and k != "video_error"
+                  and row[k] not in ("", None)]
+    if video_keys:
+        lines.append(f"\n\nVIDEO ANALYSIS")
+        lines.append(f"{'=' * 60}")
+        for k in video_keys:
+            label = k.replace("video_", "").replace("_", " ").title()
+            lines.append(f"  {label:<40} {row[k]}")
+    video_err = row.get("video_error", "")
+    if video_err:
+        lines.append(f"  Video error: {video_err}")
+
+    lines.append("")
+
+    with open(report_path, "w") as f:
+        f.write("\n".join(lines))
+
+
 def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 api_key=None, model=DEFAULT_MODEL,
                 threshold_override=None, verbose=False, bulk_runs=0,
-                skip_video=False, skip_llm=False):
+                skip_video=False, skip_llm=False, reports_dir=None):
     """
     Combined batch grading: LLM code review of zips + video analysis of
     pre-recorded videos, merged into a single CSV.
@@ -509,6 +572,15 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         writer.writeheader()
         writer.writerows(row_list)
     print(f"\nResults written to {results_csv}")
+
+    # ── Generate per-student reports ──────────────────────────
+    if reports_dir:
+        os.makedirs(reports_dir, exist_ok=True)
+        for student in all_students:
+            report_path = os.path.join(reports_dir, f"{student}_report.txt")
+            generate_report(student, rows[student], report_path)
+        print(f"Grade reports written to {reports_dir}/ "
+              f"({len(all_students)} files)")
 
     vid_ok = sum(1 for r in row_list if any(
         k.startswith("video_") and k != "video_error" for k in r))
@@ -963,8 +1035,61 @@ def main():
         help="Skip LLM code review phase (video only); merges with "
              "existing LLM columns from --results-csv if present"
     )
+    parser.add_argument(
+        "--export-rubric", metavar="FILE",
+        help="Export rubric items with descriptions and point weights "
+             "to a YAML file, then exit.  Edit the file to set weights."
+    )
+    parser.add_argument(
+        "--rubric", metavar="FILE",
+        help="Load rubric point weights from a YAML file (as exported "
+             "by --export-rubric)"
+    )
+    parser.add_argument(
+        "--reports-dir", metavar="DIR",
+        help="Generate per-student grade report text files in DIR"
+    )
 
     args = parser.parse_args()
+
+    # ── Export rubric mode ────────────────────────────────────────
+    if args.export_rubric:
+        import yaml
+        rubric_data = []
+        for item_id in RUBRIC_ITEMS:
+            rubric_data.append({
+                "id": item_id,
+                "description": RUBRIC_DESCRIPTIONS.get(item_id, item_id),
+                "points": RUBRIC_POINTS.get(item_id, 1),
+            })
+        with open(args.export_rubric, "w") as f:
+            yaml.dump({"rubric": rubric_data}, f,
+                      default_flow_style=False, sort_keys=False)
+        print(f"Rubric exported to {args.export_rubric}")
+        print("Edit the 'points' values, then pass --rubric to use them.")
+        sys.exit(0)
+
+    # ── Load rubric weights ──────────────────────────────────────
+    if args.rubric:
+        import yaml
+        with open(args.rubric, "r") as f:
+            rubric_data = yaml.safe_load(f)
+        for entry in rubric_data.get("rubric", []):
+            item_id = entry["id"]
+            if item_id in RUBRIC_POINTS:
+                RUBRIC_POINTS[item_id] = entry["points"]
+                if "description" in entry:
+                    RUBRIC_DESCRIPTIONS[item_id] = entry["description"]
+        # Recompute max.  (Module-level RUBRIC_MAX_POINTS is a simple int,
+        # so we import and reassign in the module namespace.)
+        import grading.lab1.code_review as _cr
+        _cr.RUBRIC_MAX_POINTS = sum(
+            RUBRIC_POINTS.get(k, 1) for k in RUBRIC_ITEMS)
+        # Also update our local binding.
+        global RUBRIC_MAX_POINTS  # noqa: F811
+        RUBRIC_MAX_POINTS = _cr.RUBRIC_MAX_POINTS
+        print(f"Loaded rubric weights from {args.rubric} "
+              f"(max {RUBRIC_MAX_POINTS} pts)")
 
     # ── Single-zip mode ───────────────────────────────────────────
     if args.zip:
@@ -1037,6 +1162,7 @@ def main():
             bulk_runs=args.bulk,
             skip_video=args.skip_video,
             skip_llm=args.skip_llm,
+            reports_dir=args.reports_dir,
         )
         sys.exit(0)
 
