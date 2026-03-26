@@ -1,0 +1,14 @@
+display_name: "Lab 2 - Phase 2"
+canvas_assignment_id: "510246"
+instructions: |
+  Please upload your final code files only for the **second phase**
+  (using a timer interrupt rather than busy wait) portion of the assignment!
+  
+  **Note:** Submit your writeup only in the Lab2-Phase3 assignment.
+
+pre_compile_text: |
+  Keep an eye on the compiation output. While you can submit code that
+  does not compile, you will receive only limited partial credit.
+scoring:
+  submit_score: 25
+  compile_success_score: 50
