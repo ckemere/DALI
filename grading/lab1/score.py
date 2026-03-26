@@ -17,12 +17,14 @@ SCORE_FIELDS = [
     "avg_leds_on",
     "pct_exactly_2_on",
     "distinct_rings",
+    "all_24_leds_seen",
     "timing_1hz",
     "timing_interval",
     "inner_clockwise_sequence",
     "outer_clockwise_sequence",
     "inner_sequence_wrap",
     "outer_sequence_wrap",
+    "full_clock_cycle",
     "hour_increment_at_wrap",
     "total_state_changes",
 ]
@@ -31,31 +33,37 @@ SCORE_FIELDS = [
 # These are the SCORE_FIELDS entries that produce PASS/FAIL verdicts.
 VIDEO_RUBRIC_ITEMS = [
     "distinct_rings",
+    "all_24_leds_seen",
     "timing_1hz",
     "inner_clockwise_sequence",
     "outer_clockwise_sequence",
     "inner_sequence_wrap",
     "outer_sequence_wrap",
+    "full_clock_cycle",
     "hour_increment_at_wrap",
 ]
 
 VIDEO_RUBRIC_POINTS = {
     "distinct_rings":            1,
+    "all_24_leds_seen":          1,
     "timing_1hz":                1,
     "inner_clockwise_sequence":  1,
     "outer_clockwise_sequence":  1,
     "inner_sequence_wrap":       1,
     "outer_sequence_wrap":       1,
+    "full_clock_cycle":          1,
     "hour_increment_at_wrap":    1,
 }
 
 VIDEO_RUBRIC_DESCRIPTIONS = {
     "distinct_rings":            "Both LED rings active",
+    "all_24_leds_seen":          "All 24 LEDs activated",
     "timing_1hz":                "Timing ~1 Hz",
     "inner_clockwise_sequence":  "Inner ring steps clockwise",
     "outer_clockwise_sequence":  "Outer ring steps clockwise",
     "inner_sequence_wrap":       "Inner ring wraps (11\u21920)",
     "outer_sequence_wrap":       "Outer ring wraps (11\u21920)",
+    "full_clock_cycle":          "Complete 12-hour clock cycle",
     "hour_increment_at_wrap":    "Hour advances on second wrap",
 }
 
@@ -260,6 +268,45 @@ def score(timeline):
     results["outer_sequence_wrap"] = (
         "PASS" if _check_wrap(outer_seq) else "NOT_OBSERVED"
     )
+
+    # ── All 24 LEDs seen (verdict) ─────────────────────────────────
+    if o_count == 12 and i_count == 12:
+        results["all_24_leds_seen"] = "PASS (24/24)"
+    else:
+        results["all_24_leds_seen"] = (
+            f"FAIL ({o_count + i_count}/24, "
+            f"outer:{o_count}/12, inner:{i_count}/12)"
+        )
+
+    # ── Full 12-hour cycle ─────────────────────────────────────────
+    # Check that the inner (second) hand visited all 12 positions
+    # in a complete 0→1→2→…→11→0 cycle, AND that the outer (hour)
+    # hand advanced through all 12 positions over the full video.
+    inner_positions_seen = set(idx for _, idx in inner_seq)
+    outer_positions_seen = set(idx for _, idx in outer_seq)
+    inner_wraps = sum(
+        1 for i in range(len(inner_seq) - 1)
+        if inner_seq[i][1] == 11 and inner_seq[i + 1][1] == 0
+    )
+    outer_wraps = sum(
+        1 for i in range(len(outer_seq) - 1)
+        if outer_seq[i][1] == 11 and outer_seq[i + 1][1] == 0
+    )
+
+    inner_full = len(inner_positions_seen) == 12 and inner_wraps >= 1
+    outer_full = len(outer_positions_seen) == 12 and outer_wraps >= 1
+    if inner_full and outer_full:
+        results["full_clock_cycle"] = (
+            f"PASS (inner: 12/12 pos, {inner_wraps} wrap(s); "
+            f"outer: 12/12 pos, {outer_wraps} wrap(s))"
+        )
+    else:
+        parts = []
+        parts.append(f"inner: {len(inner_positions_seen)}/12 pos, "
+                      f"{inner_wraps} wrap(s)")
+        parts.append(f"outer: {len(outer_positions_seen)}/12 pos, "
+                      f"{outer_wraps} wrap(s)")
+        results["full_clock_cycle"] = f"FAIL ({'; '.join(parts)})"
 
     # ── Hour Increment at Wrap ────────────────────────────────────
     # The hour hand (outer) should advance by one position each time
