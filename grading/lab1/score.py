@@ -27,6 +27,57 @@ SCORE_FIELDS = [
     "total_state_changes",
 ]
 
+# Video-based rubric items that carry point values.
+# These are the SCORE_FIELDS entries that produce PASS/FAIL verdicts.
+VIDEO_RUBRIC_ITEMS = [
+    "distinct_rings",
+    "timing_1hz",
+    "inner_clockwise_sequence",
+    "outer_clockwise_sequence",
+    "inner_sequence_wrap",
+    "outer_sequence_wrap",
+    "hour_increment_at_wrap",
+]
+
+VIDEO_RUBRIC_POINTS = {
+    "distinct_rings":            1,
+    "timing_1hz":                1,
+    "inner_clockwise_sequence":  1,
+    "outer_clockwise_sequence":  1,
+    "inner_sequence_wrap":       1,
+    "outer_sequence_wrap":       1,
+    "hour_increment_at_wrap":    1,
+}
+
+VIDEO_RUBRIC_DESCRIPTIONS = {
+    "distinct_rings":            "Both LED rings active",
+    "timing_1hz":                "Timing ~1 Hz",
+    "inner_clockwise_sequence":  "Inner ring steps clockwise",
+    "outer_clockwise_sequence":  "Outer ring steps clockwise",
+    "inner_sequence_wrap":       "Inner ring wraps (11\u21920)",
+    "outer_sequence_wrap":       "Outer ring wraps (11\u21920)",
+    "hour_increment_at_wrap":    "Hour advances on second wrap",
+}
+
+VIDEO_RUBRIC_MAX_POINTS = sum(VIDEO_RUBRIC_POINTS.get(k, 1)
+                              for k in VIDEO_RUBRIC_ITEMS)
+
+
+def video_verdict(field, raw_value):
+    """Extract a PASS/FAIL verdict from a raw video score field value."""
+    if not raw_value or raw_value == "NO_DATA":
+        return "NO_DATA"
+    val = str(raw_value).upper()
+    if val.startswith("PASS"):
+        return "PASS"
+    if val.startswith("FAIL"):
+        return "FAIL"
+    if val.startswith("PARTIAL"):
+        return "PARTIAL"
+    if val.startswith("NOT_OBSERVED"):
+        return "NOT_OBSERVED"
+    return "UNCLEAR"
+
 
 def _extract_single_led_sequence(frames, ring_key):
     """

@@ -183,14 +183,17 @@ def upload_grades(csv_path, reports_dir=None, video_dir=None,
         rows = list(reader)
         fieldnames = reader.fieldnames
 
-    # Auto-detect score column.
+    # Auto-detect score column (prefer grand_total, fall back to llm_total).
     if not score_column:
-        for fn in fieldnames:
-            if fn.startswith("llm_total"):
-                score_column = fn
+        for prefix in ("grand_total", "llm_total"):
+            for fn in fieldnames:
+                if fn.startswith(prefix):
+                    score_column = fn
+                    break
+            if score_column:
                 break
     if not score_column:
-        print("Error: could not find llm_total column in CSV")
+        print("Error: could not find grand_total or llm_total column in CSV")
         sys.exit(1)
 
     print(f"CSV: {csv_path} ({len(rows)} students)")
