@@ -966,6 +966,11 @@ def main():
              "Value is the directory of .zip files. "
              "Use --video-dir for pre-recorded videos."
     )
+    source.add_argument(
+        "--export-rubric", metavar="FILE",
+        help="Export rubric items with descriptions and point weights "
+             "to a YAML file, then exit.  Edit the file to set weights."
+    )
 
     parser.add_argument(
         "--ccxml", default=DEFAULT_CCXML,
@@ -1034,11 +1039,6 @@ def main():
         "--skip-llm", action="store_true",
         help="Skip LLM code review phase (video only); merges with "
              "existing LLM columns from --results-csv if present"
-    )
-    parser.add_argument(
-        "--export-rubric", metavar="FILE",
-        help="Export rubric items with descriptions and point weights "
-             "to a YAML file, then exit.  Edit the file to set weights."
     )
     parser.add_argument(
         "--rubric", metavar="FILE",
