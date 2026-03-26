@@ -31,6 +31,13 @@ try:
 except ImportError:
     _REQUESTS_AVAILABLE = False
 
+# Re-use shared Canvas helpers.
+from grading.canvas import (
+    fetch_student_map,
+    upload_grade,
+    resolve_user_id,
+)
+
 
 _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
 
@@ -57,103 +64,6 @@ def build_feedback_zip(student, report_path, video_path):
         if video_path and os.path.isfile(video_path):
             zf.write(video_path, os.path.basename(video_path))
     return tmp.name
-
-
-def _canvas_get(session, base_url, path, params=None):
-    """GET with pagination support."""
-    url = f"{base_url}/api/v1{path}"
-    results = []
-    while url:
-        resp = session.get(url, params=params)
-        resp.raise_for_status()
-        results.extend(resp.json())
-        # Canvas pagination via Link header.
-        url = None
-        link = resp.headers.get("Link", "")
-        for part in link.split(","):
-            if 'rel="next"' in part:
-                url = part.split("<")[1].split(">")[0]
-        params = None  # only pass params on first request
-    return results
-
-
-def fetch_student_map(session, base_url, course_id):
-    """Return {sortable_name_lower: canvas_user_id} for enrolled students."""
-    students = _canvas_get(
-        session, base_url,
-        f"/courses/{course_id}/users",
-        params={"enrollment_type[]": "student", "per_page": 200},
-    )
-    mapping = {}
-    for s in students:
-        # Canvas sortable_name is "Last, First".
-        # Build multiple lookup keys for flexible matching.
-        sid = s["id"]
-        name = s.get("sortable_name", "").strip().lower()
-        login = s.get("login_id", "").strip().lower()
-        mapping[name] = sid
-        if login:
-            mapping[login] = sid
-        # Also try "first_last" style.
-        parts = name.split(", ", 1)
-        if len(parts) == 2:
-            mapping[f"{parts[1]}_{parts[0]}".replace(" ", "_")] = sid
-    return mapping
-
-
-def upload_grade(session, base_url, course_id, assignment_id,
-                 user_id, score, comment_text=None, attachment_path=None):
-    """Submit a grade and optional file comment to Canvas."""
-    url = (f"{base_url}/api/v1/courses/{course_id}"
-           f"/assignments/{assignment_id}/submissions/{user_id}")
-
-    # Set grade.
-    data = {"submission": {"posted_grade": str(score)}}
-    resp = session.put(url, json=data)
-    resp.raise_for_status()
-
-    # Upload feedback file as a submission comment attachment.
-    if attachment_path and os.path.isfile(attachment_path):
-        # Step 1: request upload slot.
-        fname = os.path.basename(attachment_path)
-        fsize = os.path.getsize(attachment_path)
-        upload_url = (f"{base_url}/api/v1/courses/{course_id}"
-                      f"/assignments/{assignment_id}"
-                      f"/submissions/{user_id}/comments/files")
-        resp = session.post(upload_url, json={
-            "name": fname,
-            "size": fsize,
-            "content_type": "application/zip",
-        })
-        resp.raise_for_status()
-        upload_params = resp.json()
-
-        # Step 2: upload file.
-        with open(attachment_path, "rb") as f:
-            resp2 = requests.post(
-                upload_params["upload_url"],
-                data=upload_params.get("upload_params", {}),
-                files={"file": (fname, f)},
-            )
-            resp2.raise_for_status()
-        file_id = resp2.json()["id"]
-
-        # Step 3: attach file as submission comment.
-        comment_data = {
-            "comment": {
-                "text_comment": comment_text or "See attached feedback.",
-                "file_ids": [file_id],
-            }
-        }
-        resp3 = session.put(url, json=comment_data)
-        resp3.raise_for_status()
-
-    elif comment_text:
-        comment_data = {
-            "comment": {"text_comment": comment_text}
-        }
-        resp = session.put(url, json=comment_data)
-        resp.raise_for_status()
 
 
 def upload_grades(csv_path, reports_dir=None, video_dir=None,
@@ -246,14 +156,7 @@ def upload_grades(csv_path, reports_dir=None, video_dir=None,
             continue
 
         # Resolve Canvas user ID.
-        student_lower = student.lower()
-        user_id = student_map.get(student_lower)
-        if not user_id:
-            # Try partial matching.
-            for key, uid in student_map.items():
-                if student_lower in key or key in student_lower:
-                    user_id = uid
-                    break
+        user_id = resolve_user_id(student, student_map)
         if not user_id:
             print(f"  {student}: SKIPPED (not found in Canvas roster)")
             skipped += 1
