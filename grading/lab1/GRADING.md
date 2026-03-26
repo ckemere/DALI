@@ -326,16 +326,24 @@ python -m grading.lab1.review_cli --batch ./submissions/ --results-csv review.cs
 
 ## File Reference
 
+### Assessment primitives (`assess/` — shared with the DALI web app)
+
+| File                     | Purpose                                              |
+| ------------------------ | ---------------------------------------------------- |
+| `assess/build.py`        | Extract, compile, flash submissions; record video    |
+| `assess/video.py`        | OpenCV LED detection from video frames               |
+| `assess/lab1_score.py`   | Score a video timeline against the Lab 1 rubric      |
+| `assess/code_review.py`  | Single-student Gemini code review                    |
+
+### Grading workflows (`grading/` — batch grading and Canvas upload)
+
 | File                            | Purpose                                         |
 | ------------------------------- | ----------------------------------------------- |
 | `grading/lab1/grade.py`         | Main orchestrator (compile, flash, record, analyze, review) |
-| `grading/lab1/score.py`         | Video timeline scoring (rubric logic)           |
+| `grading/lab1/code_review.py`   | Bulk review orchestrator (wraps assess/code_review.py) |
 | `grading/lab1/analyze.py`       | Standalone video analysis CLI                   |
-| `grading/lab1/code_review.py`   | Gemini-based AI code review                     |
 | `grading/lab1/review_cli.py`    | CLI for single/batch code review                |
 | `grading/lab1/score_results.py` | Combine results, apply rubric weights, generate reports |
 | `grading/lab1/canvas_upload.py` | Upload grades + feedback bundles to Canvas      |
-| `grading/video_analyzer.py`     | OpenCV LED detection from video frames          |
 | `grading/calibrate.py`          | Interactive GUI for LED board calibration       |
-| `grading/build_utils.py`        | Compile, flash, and recording utilities         |
 | `grading/canvas.py`             | Shared Canvas API helpers                       |

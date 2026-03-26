@@ -201,9 +201,17 @@ files configured in `lab.yaml`:
 
 ## File Reference
 
+### Assessment primitives (`assess/` — shared with the DALI web app)
+
+| File                     | Purpose                                              |
+| ------------------------ | ---------------------------------------------------- |
+| `assess/pcb.py`          | KiCad PCB parsing, board area, copper text, DRC      |
+
+### Grading workflows (`grading/` — batch grading and Canvas upload)
+
 | File                                | Purpose                                      |
 | ----------------------------------- | -------------------------------------------- |
-| `grading/lab4/grade_pcbs.py`        | PCB analysis: area, DRC, copper text, HTML report |
+| `grading/lab4/grade_pcbs.py`        | Bulk PCB analysis orchestrator (wraps assess/pcb.py) |
 | `grading/lab4/score.py`             | Combine PCB analysis + timestamps into grades |
 | `grading/fetch_submission_times.py` | Fetch submission timestamps from Canvas API  |
 | `grading/canvas.py`                 | Generic Canvas grade upload                  |
