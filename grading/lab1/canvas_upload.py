@@ -15,7 +15,7 @@ Usage:
 
 Requires:
     Environment variable CANVAS_API_TOKEN (or --token).
-    Environment variable CANVAS_API_URL   (or --url, e.g. https://canvas.rice.edu).
+    Environment variable CANVAS_BASE_URL (or --url, e.g. https://canvas.rice.edu).
 """
 
 import argparse
@@ -302,7 +302,7 @@ def main():
         help="Canvas assignment ID")
     parser.add_argument(
         "--url",
-        help="Canvas API base URL (default: CANVAS_API_URL env var)")
+        help="Canvas base URL (default: CANVAS_BASE_URL env var)")
     parser.add_argument(
         "--token",
         help="Canvas API token (default: CANVAS_API_TOKEN env var)")
@@ -315,12 +315,12 @@ def main():
 
     args = parser.parse_args()
 
-    api_url = args.url or os.environ.get("CANVAS_API_URL")
+    api_url = args.url or os.environ.get("CANVAS_BASE_URL")
     api_token = args.token or os.environ.get("CANVAS_API_TOKEN")
 
     if not args.dry_run:
         if not api_url:
-            print("Error: set CANVAS_API_URL or pass --url")
+            print("Error: set CANVAS_BASE_URL or pass --url")
             sys.exit(1)
         if not api_token:
             print("Error: set CANVAS_API_TOKEN or pass --token")
