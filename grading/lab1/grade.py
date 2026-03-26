@@ -39,16 +39,9 @@ from grading.build_utils import (
 )
 
 from grading.video_analyzer import VideoAnalyzer
-from grading.lab1.score import (
-    score, SCORE_FIELDS,
-    VIDEO_RUBRIC_ITEMS, VIDEO_RUBRIC_POINTS, VIDEO_RUBRIC_DESCRIPTIONS,
-    VIDEO_RUBRIC_MAX_POINTS, video_verdict,
-)
+from grading.lab1.score import score, SCORE_FIELDS
 from grading.lab1.code_review import (
     RUBRIC_ITEMS,
-    RUBRIC_POINTS,
-    RUBRIC_DESCRIPTIONS,
-    RUBRIC_MAX_POINTS,
     review_submission,
     review_bulk,
     DEFAULT_MODEL,
@@ -177,174 +170,32 @@ def _parse_rate_limit(err_str):
     return retry_secs
 
 
-def _store_llm_results(row, llm_result):
-    """Write LLM verdicts + points into a student's row dict.
 
-    Returns (points_earned, max_points).
-    """
-    total = 0
-    for item_id in RUBRIC_ITEMS:
-        pts = RUBRIC_POINTS.get(item_id, 1)
-        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
-        entry = llm_result.get(item_id, {})
-        if isinstance(entry, dict):
-            verdict = entry.get("verdict", "MISSING")
-            row[f"llm_{item_id}_verdict"] = verdict
-            row[f"llm_{item_id}_reason"] = entry.get("reason", "")
-            row[f"llm_{item_id}_evidence"] = entry.get("evidence", "")
-        else:
-            verdict = "UNCLEAR"
-            row[f"llm_{item_id}_verdict"] = verdict
-            row[f"llm_{item_id}_reason"] = str(entry)
-            row[f"llm_{item_id}_evidence"] = ""
-        earned = pts if verdict == "PASS" else 0
-        row[f"llm_{item_id}_points ({desc}, max {pts})"] = earned
-        total += earned
-    row[f"llm_total (max {RUBRIC_MAX_POINTS})"] = total
-    return total, RUBRIC_MAX_POINTS
-
-
-def _store_video_results(row):
-    """Compute video rubric points from the raw video_* fields already in row.
-
-    Returns (points_earned, max_points).
-    """
-    total = 0
-    for item_id in VIDEO_RUBRIC_ITEMS:
-        pts = VIDEO_RUBRIC_POINTS.get(item_id, 1)
-        desc = VIDEO_RUBRIC_DESCRIPTIONS.get(item_id, item_id)
-        raw = row.get(f"video_{item_id}", "")
-        verdict = video_verdict(item_id, raw)
-        earned = pts if verdict == "PASS" else 0
-        row[f"video_{item_id}_points ({desc}, max {pts})"] = earned
-        total += earned
-    row[f"video_total (max {VIDEO_RUBRIC_MAX_POINTS})"] = total
-    return total, VIDEO_RUBRIC_MAX_POINTS
-
-
-def generate_report(student, row, report_path):
-    """Write a per-student grade report text file."""
-    lines = []
-    lines.append(f"ELEC 327 — Lab 1 Grade Report")
-    lines.append(f"Student: {student}")
-    lines.append(f"{'=' * 60}\n")
-
-    grand_total = 0
-    grand_max = 0
-
-    # ── Video rubric ──
-    lines.append("VIDEO ANALYSIS RUBRIC")
-    lines.append(f"{'-' * 60}")
-    lines.append(f"{'Item':<45} {'Pts':>4}  {'Max':>4}  Result")
-    lines.append(f"{'-' * 60}")
-
-    vid_total = 0
-    for item_id in VIDEO_RUBRIC_ITEMS:
-        desc = VIDEO_RUBRIC_DESCRIPTIONS.get(item_id, item_id)
-        max_pts = VIDEO_RUBRIC_POINTS.get(item_id, 1)
-        raw = row.get(f"video_{item_id}", "")
-        verdict = video_verdict(item_id, raw)
-        earned = max_pts if verdict == "PASS" else 0
-        vid_total += earned
-        # Show the raw value (has detail like "PASS (10/11 steps)")
-        display = raw if raw else verdict
-        lines.append(f"{desc:<45} {earned:>4}  {max_pts:>4}  {display}")
-
-    lines.append(f"{'-' * 60}")
-    lines.append(f"{'VIDEO SUBTOTAL':<45} {vid_total:>4}  "
-                 f"{VIDEO_RUBRIC_MAX_POINTS:>4}")
-    grand_total += vid_total
-    grand_max += VIDEO_RUBRIC_MAX_POINTS
-
-    # Video measurements (non-rubric info)
-    measurement_fields = [k for k in SCORE_FIELDS
-                          if k not in VIDEO_RUBRIC_ITEMS]
-    measurements = [(k, row.get(f"video_{k}", ""))
-                    for k in measurement_fields
-                    if row.get(f"video_{k}", "")]
-    if measurements:
-        lines.append("")
-        lines.append("  Additional measurements:")
-        for k, v in measurements:
-            label = k.replace("_", " ").title()
-            lines.append(f"    {label:<40} {v}")
-    video_err = row.get("video_error", "")
-    if video_err:
-        lines.append(f"  Video error: {video_err}")
-
-    # ── LLM code review rubric ──
-    lines.append(f"\n\nCODE REVIEW RUBRIC")
-    lines.append(f"{'-' * 60}")
-    lines.append(f"{'Item':<45} {'Pts':>4}  {'Max':>4}  Verdict")
-    lines.append(f"{'-' * 60}")
-
-    llm_total = 0
-    for item_id in RUBRIC_ITEMS:
-        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
-        max_pts = RUBRIC_POINTS.get(item_id, 1)
-        verdict = row.get(f"llm_{item_id}_verdict", "")
-        earned = max_pts if verdict == "PASS" else 0
-        llm_total += earned
-        lines.append(f"{desc:<45} {earned:>4}  {max_pts:>4}  {verdict}")
-
-    lines.append(f"{'-' * 60}")
-    lines.append(f"{'CODE REVIEW SUBTOTAL':<45} {llm_total:>4}  "
-                 f"{RUBRIC_MAX_POINTS:>4}")
-    grand_total += llm_total
-    grand_max += RUBRIC_MAX_POINTS
-
-    # ── Grand total ──
-    lines.append(f"\n{'=' * 60}")
-    lines.append(f"{'TOTAL':<45} {grand_total:>4}  {grand_max:>4}")
-    lines.append(f"{'=' * 60}")
-
-    # ── Detailed LLM findings ──
-    lines.append(f"\n\nDETAILED CODE REVIEW FINDINGS")
-    lines.append(f"{'=' * 60}")
-    for item_id in RUBRIC_ITEMS:
-        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
-        verdict = row.get(f"llm_{item_id}_verdict", "")
-        reason = row.get(f"llm_{item_id}_reason", "")
-        evidence = row.get(f"llm_{item_id}_evidence", "")
-
-        lines.append(f"\n{desc}")
-        lines.append(f"  Verdict: {verdict}")
-        if reason:
-            lines.append(f"  Reason:  {reason}")
-        if evidence:
-            lines.append(f"  Evidence:")
-            for eline in str(evidence).split("\n"):
-                lines.append(f"    > {eline}")
-
-    lines.append("")
-
-    with open(report_path, "w") as f:
-        f.write("\n".join(lines))
-
-
-def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
+def grade_batch(submissions_dir, video_dir, calibration_path,
+                video_output=None, llm_output=None,
                 api_key=None, model=DEFAULT_MODEL,
                 threshold_override=None, verbose=False, bulk_runs=0,
-                skip_video=False, skip_llm=False, reports_dir=None):
+                skip_video=False, skip_llm=False):
     """
-    Combined batch grading: LLM code review of zips + video analysis of
-    pre-recorded videos, merged into a single CSV.
+    Batch analysis: video analysis and/or LLM code review.
 
-    Matches students by name: zip files are matched to video files using
-    student_name_from_zip() for zips and the video filename stem.
+    Outputs raw results as JSON files (one per phase).  Scoring and
+    report generation are handled by score_results.py.
 
     Args:
         submissions_dir: Directory of student .zip files.
         video_dir:       Directory of pre-recorded <student>.mp4 videos.
         calibration_path: Path to calibration JSON for video analysis.
-        results_csv:     Output CSV path.
+        video_output:    Path for video_results.json output.
+        llm_output:      Path for llm_results.json output.
         api_key:         Gemini API key (or GEMINI_API_KEY env var).
         model:           Gemini model name.
         threshold_override: Optional brightness threshold override.
         verbose:         Print LLM prompts/responses.
         bulk_runs:       If >0, send all students in a single LLM request,
                          repeated this many times with shuffled order.
-                         Flags inconsistencies across runs.
+        skip_video:      Skip video analysis phase.
+        skip_llm:        Skip LLM code review phase.
     """
     import time
 
@@ -382,90 +233,16 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         print(f"Calibration: {calibration_path}")
         print(f"Thresholds: outer={analyzer.outer_threshold}  "
               f"inner={analyzer.inner_threshold}")
-    if bulk_runs:
-        print(f"LLM model: {model}  (bulk mode: {bulk_runs} run(s))\n")
-    else:
-        print(f"LLM model: {model}\n")
-
-    # ── Prepare CSV fields ────────────────────────────────────
-    fieldnames = ["student"]
-    fieldnames.extend(f"video_{k}" for k in SCORE_FIELDS)
-    for item_id in VIDEO_RUBRIC_ITEMS:
-        pts = VIDEO_RUBRIC_POINTS.get(item_id, 1)
-        desc = VIDEO_RUBRIC_DESCRIPTIONS.get(item_id, item_id)
-        fieldnames.append(f"video_{item_id}_points ({desc}, max {pts})")
-    fieldnames.append(f"video_total (max {VIDEO_RUBRIC_MAX_POINTS})")
-    fieldnames.append("video_error")
-    for item_id in RUBRIC_ITEMS:
-        pts = RUBRIC_POINTS.get(item_id, 1)
-        desc = RUBRIC_DESCRIPTIONS.get(item_id, item_id)
-        fieldnames.append(f"llm_{item_id}_verdict")
-        fieldnames.append(f"llm_{item_id}_points ({desc}, max {pts})")
-        fieldnames.append(f"llm_{item_id}_reason")
-        fieldnames.append(f"llm_{item_id}_evidence")
-    fieldnames.append(f"llm_total (max {RUBRIC_MAX_POINTS})")
-    grand_max = VIDEO_RUBRIC_MAX_POINTS + RUBRIC_MAX_POINTS
-    fieldnames.append(f"grand_total (max {grand_max})")
-    if bulk_runs and bulk_runs > 1:
-        fieldnames.append("llm_inconsistencies")
-    fieldnames.append("llm_error")
-
-    # Build row dicts keyed by student name.
-    rows = {s: {"student": s} for s in all_students}
-
-    # Pre-populate rows from existing CSV for any skipped phases.
-    if (skip_llm or skip_video) and os.path.isfile(results_csv):
-        print(f"── Loading existing results from {results_csv} ──")
-        with open(results_csv, "r", newline="") as f:
-            reader = csv.DictReader(f)
-            llm_loaded = 0
-            vid_loaded = 0
-            for csv_row in reader:
-                name = csv_row.get("student", "")
-                if name not in rows:
-                    continue
-
-                if skip_llm:
-                    # Reconstruct LLM verdicts so points are recomputed.
-                    llm_result = {}
-                    for item_id in RUBRIC_ITEMS:
-                        verdict = csv_row.get(f"llm_{item_id}_verdict", "")
-                        reason = csv_row.get(f"llm_{item_id}_reason", "")
-                        evidence = csv_row.get(f"llm_{item_id}_evidence", "")
-                        if verdict:
-                            llm_result[item_id] = {
-                                "verdict": verdict,
-                                "reason": reason,
-                                "evidence": evidence,
-                            }
-                    if llm_result:
-                        _store_llm_results(rows[name], llm_result)
-                        llm_loaded += 1
-                    for k, v in csv_row.items():
-                        if k in ("llm_error", "llm_inconsistencies") and v:
-                            rows[name][k] = v
-
-                if skip_video:
-                    # Restore raw video_* fields and recompute points.
-                    has_video = False
-                    for k, v in csv_row.items():
-                        if k.startswith("video_") and v:
-                            rows[name][k] = v
-                            has_video = True
-                    if has_video:
-                        _store_video_results(rows[name])
-                        vid_loaded += 1
-
-        parts = []
-        if skip_llm:
-            parts.append(f"LLM: {llm_loaded}")
-        if skip_video:
-            parts.append(f"video: {vid_loaded}")
-        print(f"  Loaded {', '.join(parts)} students\n")
+    if not skip_llm:
+        if bulk_runs:
+            print(f"LLM model: {model}  (bulk mode: {bulk_runs} run(s))\n")
+        else:
+            print(f"LLM model: {model}\n")
 
     t_batch_start = time.time()
 
     # ── Phase 1: Video analysis ──────────────────────────────
+    video_results = {}
     if skip_video:
         print("── Video analysis: SKIPPED (--skip-video) ──\n")
     elif analyzer and video_files:
@@ -478,9 +255,7 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             try:
                 timeline = analyzer.extract_timeline(video_files[student])
                 scores, changes, _, _ = score(timeline)
-                for k, v in scores.items():
-                    rows[student][f"video_{k}"] = v
-                vid_earned, vid_max = _store_video_results(rows[student])
+                video_results[student] = scores
 
                 changes_path = video_files[student].replace(
                     os.path.splitext(video_files[student])[1],
@@ -489,18 +264,23 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                 with open(changes_path, "w") as cf:
                     json.dump(changes, cf, indent=1)
 
-                print(f"  {vid_earned}/{vid_max} pts, "
-                      f"{scores.get('leds_activated', '?')} LEDs, "
+                print(f"  {scores.get('leds_activated', '?')} LEDs, "
                       f"timing={scores.get('timing_1hz', '?')}  "
                       f"({time.time() - t0:.1f}s)")
             except Exception as e:
                 print(f"  FAILED ({e})")
-                rows[student]["video_error"] = str(e)
+                video_results[student] = {"error": str(e)}
 
         dt_video = time.time() - t_batch_start
         print(f"Video phase done ({dt_video:.0f}s)\n")
 
+    if video_output and video_results:
+        with open(video_output, "w") as f:
+            json.dump(video_results, f, indent=2)
+        print(f"Video results written to {video_output}")
+
     # ── Phase 2: LLM code review ─────────────────────────────
+    llm_results = {}
     if skip_llm:
         print("── LLM code review: SKIPPED (--skip-llm) ──\n")
         students_with_zips = []
@@ -524,7 +304,6 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         # Run N times with shuffled order.
         all_run_results = []
         for run_idx in range(1, bulk_runs + 1):
-            # Shuffle the student order for each run.
             shuffled = list(student_dirs.items())
             random.shuffle(shuffled)
             shuffled_dirs = dict(shuffled)
@@ -561,13 +340,12 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
             # Print per-student summary for this run.
             for student in students_with_zips:
                 s_result = bulk_result.get(student, {})
-                earned = sum(
-                    RUBRIC_POINTS.get(item_id, 1)
-                    for item_id in RUBRIC_ITEMS
+                passes = sum(
+                    1 for item_id in RUBRIC_ITEMS
                     if isinstance(s_result.get(item_id), dict)
                     and s_result[item_id].get("verdict") == "PASS"
                 )
-                print(f"    {student}: {earned}/{RUBRIC_MAX_POINTS} pts")
+                print(f"    {student}: {passes}/{len(RUBRIC_ITEMS)} PASS")
 
             all_run_results.append(bulk_result)
 
@@ -575,15 +353,12 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         for d in temp_dirs:
             shutil.rmtree(d, ignore_errors=True)
 
-        # ── Merge results: use first run, flag inconsistencies ──
+        # Use first run's results; flag inconsistencies.
         print(f"\n── Consistency check ──")
         for student in students_with_zips:
             first = all_run_results[0].get(student, {})
+            llm_results[student] = first
 
-            # Store first run's results.
-            earned, max_pts = _store_llm_results(rows[student], first)
-
-            # Check consistency across runs.
             if bulk_runs > 1:
                 inconsistent = []
                 for item_id in RUBRIC_ITEMS:
@@ -599,7 +374,7 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                         )
 
                 if inconsistent:
-                    rows[student]["llm_inconsistencies"] = "; ".join(inconsistent)
+                    llm_results[student]["_inconsistencies"] = inconsistent
                     print(f"  {student}: {len(inconsistent)} inconsistent item(s)")
                     for desc in inconsistent:
                         print(f"    {desc}")
@@ -610,13 +385,11 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
         # ── Per-student mode (original) ───────────────────────
         print("── LLM per-student review ──")
         for i, student in enumerate(students_with_zips, 1):
-            t_student_start = time.time()
             print(f"\n  [{i}/{len(students_with_zips)}] {student}: "
                   f"sending to {model}...")
             build_dir = tempfile.mkdtemp(prefix=f"review_{student}_")
             try:
                 extract_submission(zip_files[student], build_dir)
-                llm_result = None
                 attempt = 0
                 while True:
                     attempt += 1
@@ -626,7 +399,7 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                             build_dir, api_key=api_key, model=model,
                             verbose=verbose,
                         )
-                        break  # success
+                        break
                     except Exception as e:
                         err_str = str(e)
                         is_rate_limit = ("429" in err_str
@@ -637,52 +410,29 @@ def grade_batch(submissions_dir, video_dir, calibration_path, results_csv,
                             print(f"         (attempt {attempt})")
                             time.sleep(wait)
                         else:
-                            raise  # non-retryable error
+                            raise
 
                 dt_llm = time.time() - t_llm_start
-                earned, max_pts = _store_llm_results(rows[student], llm_result)
-
-                print(f"  {student}: {earned}/{max_pts} pts  ({dt_llm:.1f}s)")
+                passes = sum(
+                    1 for item_id in RUBRIC_ITEMS
+                    if isinstance(llm_result.get(item_id), dict)
+                    and llm_result[item_id].get("verdict") == "PASS"
+                )
+                llm_results[student] = llm_result
+                print(f"  {student}: {passes}/{len(RUBRIC_ITEMS)} PASS  ({dt_llm:.1f}s)")
             except Exception as e:
                 print(f"  {student}: FAILED ({e})")
-                rows[student]["llm_error"] = str(e)
+                llm_results[student] = {"_error": str(e)}
             finally:
                 shutil.rmtree(build_dir, ignore_errors=True)
 
-    # ── Compute grand totals ─────────────────────────────────
-    gt_col = f"grand_total (max {grand_max})"
-    for student in all_students:
-        vid = rows[student].get(f"video_total (max {VIDEO_RUBRIC_MAX_POINTS})", 0)
-        llm = rows[student].get(f"llm_total (max {RUBRIC_MAX_POINTS})", 0)
-        try:
-            rows[student][gt_col] = int(vid) + int(llm)
-        except (ValueError, TypeError):
-            rows[student][gt_col] = ""
+    if llm_output and llm_results:
+        with open(llm_output, "w") as f:
+            json.dump(llm_results, f, indent=2)
+        print(f"LLM results written to {llm_output}")
 
-    # ── Write CSV ─────────────────────────────────────────────
-    row_list = [rows[s] for s in all_students]
-    with open(results_csv, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames,
-                                extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(row_list)
-    print(f"\nResults written to {results_csv}")
-
-    # ── Generate per-student reports ──────────────────────────
-    if reports_dir:
-        os.makedirs(reports_dir, exist_ok=True)
-        for student in all_students:
-            report_path = os.path.join(reports_dir, f"{student}_report.txt")
-            generate_report(student, rows[student], report_path)
-        print(f"Grade reports written to {reports_dir}/ "
-              f"({len(all_students)} files)")
-
-    vid_ok = sum(1 for r in row_list if any(
-        k.startswith("video_") and k != "video_error" for k in r))
-    llm_ok = sum(1 for r in row_list if any(
-        k.startswith("llm_") and k != "llm_error" for k in r))
     total_time = time.time() - t_batch_start
-    print(f"\nSummary: {vid_ok} video + {llm_ok} LLM out of {len(row_list)} students  "
+    print(f"\nDone: {len(video_results)} video + {len(llm_results)} LLM "
           f"({total_time:.0f}s total)")
 
 
@@ -1061,11 +811,6 @@ def main():
              "Value is the directory of .zip files. "
              "Use --video-dir for pre-recorded videos."
     )
-    source.add_argument(
-        "--export-rubric", metavar="FILE",
-        help="Export rubric items with descriptions and point weights "
-             "to a YAML file, then exit.  Edit the file to set weights."
-    )
 
     parser.add_argument(
         "--ccxml", default=DEFAULT_CCXML,
@@ -1132,84 +877,22 @@ def main():
     )
     parser.add_argument(
         "--skip-llm", action="store_true",
-        help="Skip LLM code review phase (video only); merges with "
-             "existing LLM columns from --results-csv if present"
+        help="Skip LLM code review phase (video only)"
     )
     parser.add_argument(
-        "--rubric", metavar="FILE",
-        help="Load rubric point weights from a YAML file (as exported "
-             "by --export-rubric)"
+        "--video-output", metavar="FILE",
+        default="video_results.json",
+        help="Output path for video analysis results JSON "
+             "(default: video_results.json)"
     )
     parser.add_argument(
-        "--reports-dir", metavar="DIR",
-        help="Generate per-student grade report text files in DIR"
+        "--llm-output", metavar="FILE",
+        default="llm_results.json",
+        help="Output path for LLM code review results JSON "
+             "(default: llm_results.json)"
     )
 
     args = parser.parse_args()
-
-    # ── Export rubric mode ────────────────────────────────────────
-    if args.export_rubric:
-        import yaml
-        video_items = []
-        for item_id in VIDEO_RUBRIC_ITEMS:
-            video_items.append({
-                "id": item_id,
-                "description": VIDEO_RUBRIC_DESCRIPTIONS.get(item_id, item_id),
-                "points": VIDEO_RUBRIC_POINTS.get(item_id, 1),
-            })
-        code_items = []
-        for item_id in RUBRIC_ITEMS:
-            code_items.append({
-                "id": item_id,
-                "description": RUBRIC_DESCRIPTIONS.get(item_id, item_id),
-                "points": RUBRIC_POINTS.get(item_id, 1),
-            })
-        with open(args.export_rubric, "w") as f:
-            yaml.dump({"video_rubric": video_items,
-                        "code_rubric": code_items}, f,
-                      default_flow_style=False, sort_keys=False)
-        print(f"Rubric exported to {args.export_rubric}")
-        print("Edit the 'points' values, then pass --rubric to use them.")
-        sys.exit(0)
-
-    # ── Load rubric weights ──────────────────────────────────────
-    if args.rubric:
-        import yaml
-        with open(args.rubric, "r") as f:
-            rubric_data = yaml.safe_load(f)
-
-        # Load video rubric weights.
-        for entry in rubric_data.get("video_rubric", []):
-            item_id = entry["id"]
-            if item_id in VIDEO_RUBRIC_POINTS:
-                VIDEO_RUBRIC_POINTS[item_id] = entry["points"]
-                if "description" in entry:
-                    VIDEO_RUBRIC_DESCRIPTIONS[item_id] = entry["description"]
-        import grading.lab1.score as _sc
-        _sc.VIDEO_RUBRIC_MAX_POINTS = sum(
-            VIDEO_RUBRIC_POINTS.get(k, 1) for k in VIDEO_RUBRIC_ITEMS)
-        global VIDEO_RUBRIC_MAX_POINTS  # noqa: F811
-        VIDEO_RUBRIC_MAX_POINTS = _sc.VIDEO_RUBRIC_MAX_POINTS
-
-        # Load code review rubric weights.
-        # Support both old "rubric" key and new "code_rubric" key.
-        code_entries = (rubric_data.get("code_rubric", [])
-                        or rubric_data.get("rubric", []))
-        for entry in code_entries:
-            item_id = entry["id"]
-            if item_id in RUBRIC_POINTS:
-                RUBRIC_POINTS[item_id] = entry["points"]
-                if "description" in entry:
-                    RUBRIC_DESCRIPTIONS[item_id] = entry["description"]
-        import grading.lab1.code_review as _cr
-        _cr.RUBRIC_MAX_POINTS = sum(
-            RUBRIC_POINTS.get(k, 1) for k in RUBRIC_ITEMS)
-        global RUBRIC_MAX_POINTS  # noqa: F811
-        RUBRIC_MAX_POINTS = _cr.RUBRIC_MAX_POINTS
-
-        print(f"Loaded rubric weights from {args.rubric} "
-              f"(video: max {VIDEO_RUBRIC_MAX_POINTS} pts, "
-              f"code: max {RUBRIC_MAX_POINTS} pts)")
 
     # ── Single-zip mode ───────────────────────────────────────────
     if args.zip:
@@ -1274,7 +957,8 @@ def main():
             submissions_dir=args.grade_batch,
             video_dir=args.video_dir,
             calibration_path=args.calibration,
-            results_csv=args.results_csv,
+            video_output=args.video_output,
+            llm_output=args.llm_output,
             api_key=api_key,
             model=args.model,
             threshold_override=args.threshold,
@@ -1282,7 +966,6 @@ def main():
             bulk_runs=args.bulk,
             skip_video=args.skip_video,
             skip_llm=args.skip_llm,
-            reports_dir=args.reports_dir,
         )
         sys.exit(0)
 
