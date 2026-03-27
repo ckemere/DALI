@@ -17,7 +17,7 @@ import tempfile
 import subprocess
 import yaml
 
-from pcb_makefile_generator import create_makefile_for_pcb
+from assess.pcb import create_makefile_for_pcb
 
 
 def main():

@@ -25,7 +25,7 @@ from cas import CASClient
 from datetime import timedelta # for ticket timeout
 
 from compile_queue import CompilationQueue
-from pcb_makefile_generator import create_makefile_for_pcb  # NEW: PCB support
+from assess.pcb import create_makefile_for_pcb
 
 # =============================================================================
 # ENVIRONMENT / CONFIG VALIDATION

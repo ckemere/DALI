@@ -26,8 +26,8 @@ import tempfile
 import zipfile
 from datetime import datetime
 
-from grading.build_utils import extract_submission, student_name_from_zip
-from grading.lab1.code_review import (
+from assess.build import extract_submission, student_name_from_zip
+from assess.code_review import (
     RUBRIC_ITEMS,
     review_submission,
     format_results,

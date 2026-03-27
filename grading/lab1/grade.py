@@ -23,9 +23,8 @@ import tempfile
 import zipfile
 from datetime import datetime
 
-from makefile_generator import verify_toolchain
-
-from grading.build_utils import (
+from assess.build import (
+    verify_toolchain,
     extract_submission,
     ensure_infrastructure,
     compile_submission,
@@ -38,13 +37,15 @@ from grading.build_utils import (
     VIDEO_DURATION,
 )
 
-from grading.video_analyzer import VideoAnalyzer
-from grading.lab1.score import score, SCORE_FIELDS
-from grading.lab1.code_review import (
+from assess.video import VideoAnalyzer
+from assess.lab1_score import score, SCORE_FIELDS
+from assess.code_review import (
     RUBRIC_ITEMS,
     review_submission,
-    review_bulk,
     DEFAULT_MODEL,
+)
+from grading.lab1.code_review import (
+    review_bulk,
 )
 
 LAB_NAME = "lab1"

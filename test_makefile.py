@@ -10,7 +10,7 @@ import os
 # Make sure we can import from current directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from makefile_generator import (
+from assess.build import (
     create_makefile_for_lab,
     verify_toolchain,
     ensure_linker_script

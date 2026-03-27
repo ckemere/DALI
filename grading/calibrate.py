@@ -31,7 +31,7 @@ except ImportError:
     print("  pip install opencv-python numpy")
     sys.exit(1)
 
-from grading.build_utils import (
+from assess.build import (
     extract_submission,
     ensure_infrastructure,
     compile_submission,

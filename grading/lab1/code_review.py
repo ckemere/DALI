@@ -1,23 +1,17 @@
 """
-Gemini-based code review for Lab 1 rubric items.
+Bulk Gemini-based code review orchestrator for Lab 1.
 
 Single-student review primitives live in assess/code_review.py.
-This module re-exports them and adds the bulk review orchestrator.
+This module provides review_bulk() which applies those primitives
+across a batch of student submissions.
 """
 
 import json
 import os
 
-# Re-export all primitives so existing consumers work unchanged.
-from assess.code_review import (  # noqa: F401
-    RUBRIC_ITEMS,
-    RUBRIC_POINTS,
-    RUBRIC_DESCRIPTIONS,
-    RUBRIC_MAX_POINTS,
+from assess.code_review import (
     DEFAULT_MODEL,
     collect_artifacts,
-    review_submission,
-    format_results,
     _parse_response,
     _SYSTEM_PROMPT,
     _RUBRIC_PROMPT,

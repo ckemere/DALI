@@ -27,12 +27,12 @@ import sys
 
 import yaml
 
-from grading.lab1.score import (
+from assess.lab1_score import (
     SCORE_FIELDS,
     VIDEO_RUBRIC_ITEMS, VIDEO_RUBRIC_POINTS, VIDEO_RUBRIC_DESCRIPTIONS,
     VIDEO_RUBRIC_MAX_POINTS, video_verdict,
 )
-from grading.lab1.code_review import (
+from assess.code_review import (
     RUBRIC_ITEMS,
     RUBRIC_POINTS, RUBRIC_DESCRIPTIONS, RUBRIC_MAX_POINTS,
 )

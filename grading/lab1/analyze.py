@@ -8,8 +8,8 @@ Usage:
 
 import sys
 
-from grading.video_analyzer import VideoAnalyzer
-from grading.lab1.score import score, SCORE_FIELDS
+from assess.video import VideoAnalyzer
+from assess.lab1_score import score, SCORE_FIELDS
 
 
 def main():

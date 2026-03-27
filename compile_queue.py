@@ -20,13 +20,13 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import uuid
 
-from makefile_generator import (
+from assess.build import (
     create_makefile_for_lab,
     ensure_linker_script,
     verify_toolchain,
 )
 
-from pcb_makefile_generator import (
+from assess.pcb import (
     create_makefile_for_pcb,
     verify_pcb_toolchain,
 )
