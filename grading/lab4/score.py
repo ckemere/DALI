@@ -25,6 +25,15 @@ import argparse
 import csv
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+CENTRAL_TZ = ZoneInfo("America/Chicago")
+
+
+def _fmt_central(dt):
+    """Format a datetime as a readable Central Time string."""
+    ct = dt.astimezone(CENTRAL_TZ)
+    return ct.strftime("%b %d %I:%M %p %Z")
 
 
 def parse_cutoff(cutoff_str):
@@ -106,9 +115,15 @@ def score_student(pcb_row, presubmit_row, max_area, cutoff):
         rubric["weak_drc"] = 0
 
     # 10 pts bonus: pre-submission review on time
+    presubmit_submitted_at = None
     if presubmit_row and cutoff:
-        submitted_at = presubmit_row.get("submitted_at", "")
-        if is_on_time(submitted_at, cutoff):
+        submitted_at_str = presubmit_row.get("submitted_at", "")
+        if submitted_at_str:
+            presubmit_submitted_at = datetime.fromisoformat(submitted_at_str)
+            if presubmit_submitted_at.tzinfo is None:
+                presubmit_submitted_at = presubmit_submitted_at.replace(
+                    tzinfo=timezone.utc)
+        if is_on_time(submitted_at_str, cutoff):
             rubric["presubmit_bonus"] = 10
         else:
             rubric["presubmit_bonus"] = 0
@@ -146,9 +161,21 @@ def score_student(pcb_row, presubmit_row, max_area, cutoff):
             lines.append(f"[ 0/10] Weak DRC: FAIL")
 
     if rubric["presubmit_bonus"] > 0:
-        lines.append(f"[{rubric['presubmit_bonus']:2d}/10] BONUS: Pre-submission review on time")
+        lines.append(
+            f"[{rubric['presubmit_bonus']:2d}/10] BONUS: Pre-submission review on time"
+            f" (submitted {_fmt_central(presubmit_submitted_at)},"
+            f" deadline {_fmt_central(cutoff)})")
+    elif presubmit_submitted_at and cutoff:
+        lines.append(
+            f"[ 0/10] BONUS: Pre-submission review late"
+            f" (submitted {_fmt_central(presubmit_submitted_at)},"
+            f" deadline {_fmt_central(cutoff)})")
+    elif cutoff:
+        lines.append(
+            f"[ 0/10] BONUS: No pre-submission review received"
+            f" (deadline was {_fmt_central(cutoff)})")
     else:
-        lines.append(f"[ 0/10] BONUS: Pre-submission review not received on time")
+        lines.append(f"[ 0/10] BONUS: Pre-submission review not evaluated")
 
     rubric_text = "\n".join(lines)
     return total, rubric_text, rubric
