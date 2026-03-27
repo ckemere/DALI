@@ -6,7 +6,7 @@ Outputs a CSV with student name, Canvas user ID, net ID (login_id), and
 submission timestamp.
 
 Usage:
-  python fetch_submission_times.py <canvas_assignment_id> [-o output.csv]
+  python -m grading.fetch_submission_times <canvas_assignment_id> [-o output.csv]
 
 Requires environment variables:
   CANVAS_API_TOKEN  — Canvas API bearer token

@@ -3,8 +3,8 @@
 Score Lab 4 (PCB Design) submissions and generate a Canvas-ready grades CSV.
 
 Combines two data sources:
-  1. PCB analysis CSV from grade_pcbs.py (area, initials, DRC results)
-  2. Pre-submission review timestamps from fetch_submission_times.py
+  1. PCB analysis CSV from grading/lab4/grade_pcbs.py (area, initials, DRC results)
+  2. Pre-submission review timestamps from grading/fetch_submission_times.py
 
 Rubric (100 + 10 bonus):
   70 pts  — Submitted a PCB design
@@ -42,7 +42,7 @@ def parse_cutoff(cutoff_str):
 
 
 def load_pcb_results(path):
-    """Load grade_pcbs.py CSV output, keyed by net_id."""
+    """Load PCB analysis CSV output, keyed by net_id."""
     results = {}
     with open(path, "r", newline="") as f:
         reader = csv.DictReader(f)
@@ -53,7 +53,7 @@ def load_pcb_results(path):
 
 
 def load_presubmit_times(path):
-    """Load fetch_submission_times.py CSV, keyed by net_id."""
+    """Load pre-submission times CSV, keyed by net_id."""
     times = {}
     with open(path, "r", newline="") as f:
         reader = csv.DictReader(f)
@@ -186,10 +186,10 @@ def main():
         description="Score Lab 4 PCB submissions and generate Canvas-ready CSV.")
     parser.add_argument(
         "--pcb-csv", required=True,
-        help="CSV from grade_pcbs.py")
+        help="CSV from grading.lab4.grade_pcbs")
     parser.add_argument(
         "--presubmit-csv", default=None,
-        help="CSV from fetch_submission_times.py (Lab 4A submissions)")
+        help="CSV from grading.fetch_submission_times (Lab 4A submissions)")
     parser.add_argument(
         "--cutoff", default=None,
         help="ISO 8601 cutoff time for pre-submission bonus "
