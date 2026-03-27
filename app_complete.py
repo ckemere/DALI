@@ -761,7 +761,19 @@ def canvas_api_request(endpoint, method="GET", data=None, files=None):
     headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
 
     if method == "GET":
-        r = requests.get(url, headers=headers, timeout=30)
+        # Fetch all pages (Canvas paginates list endpoints via Link headers)
+        results = []
+        next_url = url
+        while next_url:
+            r = requests.get(next_url, headers=headers, timeout=30)
+            r.raise_for_status()
+            body = r.json()
+            if isinstance(body, list):
+                results.extend(body)
+                next_url = r.links.get("next", {}).get("url")
+            else:
+                return body
+        return results
     elif method == "POST":
         if files:
             r = requests.post(url, headers=headers, data=data, files=files, timeout=60)
