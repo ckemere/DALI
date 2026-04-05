@@ -310,7 +310,7 @@ def flash_firmware(build_dir, dslite_path, ccxml_path, output_name):
 # ---------------------------------------------------------------------------
 
 def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
-                    settle_time=3):
+                    settle_time=3, framerate=30):
     """
     Start recording video in the background using ffmpeg.
     Auto-detects platform (Linux v4l2, macOS avfoundation).
@@ -318,14 +318,23 @@ def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
     Waits *settle_time* seconds after launching ffmpeg so the camera
     is actually capturing before the caller proceeds.
 
+    Args:
+        output_path: Path for the output video file.
+        duration:    Recording duration in seconds.
+        camera_device: Camera device index.
+        settle_time: Seconds to wait after launching ffmpeg.
+        framerate:   Capture frame rate (default 30; use higher for
+                     PWM flicker detection, e.g. 120 or 240).
+
     Returns a Popen process, or None on error.
     """
     system = platform.system()
+    fr = str(framerate)
     if system == "Linux":
-        input_args = ["-f", "v4l2", "-framerate", "30",
+        input_args = ["-f", "v4l2", "-framerate", fr,
                       "-i", f"/dev/video{camera_device}"]
     elif system == "Darwin":
-        input_args = ["-f", "avfoundation", "-framerate", "30",
+        input_args = ["-f", "avfoundation", "-framerate", fr,
                       "-i", str(camera_device)]
     else:
         print(f"  Warning: unsupported platform {system} for recording")
