@@ -394,106 +394,26 @@ def _analyze_pwm(raw_timeline, analyzer):
     return results
 
 
-def extract_brightness_timeline(video_path, analyzer, sample_fps=0):
-    """
-    Like VideoAnalyzer.extract_timeline() but also records raw brightness
-    values (not just boolean on/off) for PWM analysis.
-
-    Args:
-        video_path: Path to the video file.
-        analyzer:   A VideoAnalyzer instance.
-        sample_fps: If >0, subsample to this rate.
-
-    Returns:
-        List of dicts with keys: t, outer, inner, debug,
-        outer_brightness (list of 12 floats),
-        inner_brightness (list of 12 floats).
-    """
-    import cv2
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    skip = 1 if sample_fps <= 0 else max(1, int(fps / sample_fps))
-
-    raw = []
-    idx = 0
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if idx % skip == 0:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            t = idx / fps
-            outer_bri = [
-                analyzer._brightness(gray, x, y)
-                for x, y in analyzer.outer_pos
-            ]
-            inner_bri = [
-                analyzer._brightness(gray, x, y)
-                for x, y in analyzer.inner_pos
-            ]
-            debug_bri = (
-                analyzer._brightness(gray, *analyzer.debug_pos)
-                if analyzer.debug_pos else 0.0
-            )
-            outer = [b > analyzer.outer_threshold for b in outer_bri]
-            inner = [b > analyzer.inner_threshold for b in inner_bri]
-            debug = debug_bri > analyzer.debug_threshold
-
-            raw.append({
-                "t": t,
-                "outer": outer,
-                "inner": inner,
-                "debug": debug,
-                "outer_brightness": outer_bri,
-                "inner_brightness": inner_bri,
-            })
-        idx += 1
-
-    cap.release()
-
-    # Detect t0 from debug LED.
-    t0 = 0.0
-    if analyzer.debug_pos and raw:
-        last_on = None
-        for s in raw:
-            if s["debug"]:
-                last_on = s["t"]
-        if last_on is not None:
-            t0 = last_on
-
-    for s in raw:
-        s["t"] = round(s["t"] - t0, 3)
-
-    return raw
-
-
-def score_phase3(timeline_with_brightness, analyzer):
+def score_phase3(timeline, analyzer):
     """
     Score Phase 3 video: Lab 1 clock behavior + PWM analysis.
 
     Args:
-        timeline_with_brightness: Output of extract_brightness_timeline().
+        timeline: A list of frame dicts from VideoAnalyzer.extract_timeline().
+                  Must include raw brightness fields (outer_brightness,
+                  inner_brightness) for PWM analysis.
         analyzer: The VideoAnalyzer instance.
 
     Returns:
         (results, changes, initial_outer, initial_inner)
         Same as lab1_score() but with additional PWM fields.
     """
-    # First, run the standard Lab 1 scoring on the boolean timeline.
-    bool_timeline = [
-        {"t": f["t"], "outer": f["outer"],
-         "inner": f["inner"], "debug": f["debug"]}
-        for f in timeline_with_brightness
-    ]
-    results, changes, initial_outer, initial_inner = lab1_score(bool_timeline)
+    # Lab 1 scoring only touches the boolean fields; pass the full
+    # timeline through.
+    results, changes, initial_outer, initial_inner = lab1_score(timeline)
 
-    # Then add PWM-specific analysis.
-    pwm_results = _analyze_pwm(timeline_with_brightness, analyzer)
+    # Then add PWM-specific analysis, which uses the raw brightness.
+    pwm_results = _analyze_pwm(timeline, analyzer)
     results.update(pwm_results)
 
     return results, changes, initial_outer, initial_inner

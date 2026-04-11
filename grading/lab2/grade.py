@@ -52,7 +52,6 @@ from grading.video_analyzer import VideoAnalyzer
 from assess.lab1_score import score as lab1_score, SCORE_FIELDS as LAB1_SCORE_FIELDS
 from assess.lab2_score import (
     score_phase1, score_phase2, score_phase3,
-    extract_brightness_timeline,
     PHASE1_VIDEO_RUBRIC_ITEMS,
     PHASE3_VIDEO_RUBRIC_ITEMS, PHASE3_SCORE_FIELDS,
     video_verdict,
@@ -392,21 +391,17 @@ def analyze_videos(video_dir, calibration_path, results_json,
                 all_results[student] = {}
 
             try:
+                timeline = analyzer.extract_timeline(video_path)
                 if phase == "phase3":
-                    # High-FPS PWM analysis.
-                    timeline = extract_brightness_timeline(
-                        video_path, analyzer)
-                    scores, changes, _, _ = score_phase3(
-                        timeline, analyzer)
+                    scores, changes, _, _ = score_phase3(timeline, analyzer)
                     print(f"  PWM={scores.get('pwm_detected', '?')}  "
                           f"flicker={scores.get('no_visible_flicker', '?')}")
+                elif phase == "phase1":
+                    scores, changes, _, _ = score_phase1(timeline)
+                    print(f"  timing={scores.get('timing_1hz', '?')}  "
+                          f"LEDs={scores.get('leds_activated', '?')}")
                 else:
-                    # Standard Lab 1 scoring.
-                    timeline = analyzer.extract_timeline(video_path)
-                    if phase == "phase1":
-                        scores, changes, _, _ = score_phase1(timeline)
-                    else:
-                        scores, changes, _, _ = score_phase2(timeline)
+                    scores, changes, _, _ = score_phase2(timeline)
                     print(f"  timing={scores.get('timing_1hz', '?')}  "
                           f"LEDs={scores.get('leds_activated', '?')}")
 
@@ -673,13 +668,11 @@ def grade_batch(phase_dirs, video_dir, calibration_path,
                     video_results[student] = {}
 
                 try:
+                    timeline = analyzer.extract_timeline(video_path)
                     if phase == "phase3":
-                        timeline = extract_brightness_timeline(
-                            video_path, analyzer)
                         scores, changes, _, _ = score_phase3(
                             timeline, analyzer)
                     else:
-                        timeline = analyzer.extract_timeline(video_path)
                         scores, changes, _, _ = (
                             score_phase1(timeline) if phase == "phase1"
                             else score_phase2(timeline))

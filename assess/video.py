@@ -73,12 +73,22 @@ class VideoAnalyzer:
 
     def extract_timeline(self, video_path, sample_fps=0, verbose=False):
         """
-        Sample LED on/off states from a video file.
+        Sample LED brightness and on/off states from a video file.
 
-        Returns:
-            List of dicts: [{"t": float, "outer": [bool]*12,
-                             "inner": [bool]*12, "debug": bool}, ...]
-            where t is seconds since code started running.
+        Returns a list of frame dicts:
+            [{"t": float,                       # seconds since t0
+              "outer": [bool]*12,               # outer ring on/off
+              "inner": [bool]*12,               # inner ring on/off
+              "debug": bool,                    # programming LED
+              "outer_brightness": [float]*12,   # raw ROI means
+              "inner_brightness": [float]*12,
+              "debug_brightness": float}, ...]
+
+        The boolean fields are computed by thresholding the raw
+        brightness with self.outer_threshold / self.inner_threshold /
+        self.debug_threshold.  Raw brightness values are always
+        included so downstream code (Phase 3 PWM analysis, baseline
+        collection) can re-threshold or re-aggregate as needed.
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -126,7 +136,13 @@ class VideoAnalyzer:
                     diag_count += 1
 
                 raw.append({
-                    "t": t, "outer": outer, "inner": inner, "debug": debug,
+                    "t": t,
+                    "outer": outer,
+                    "inner": inner,
+                    "debug": debug,
+                    "outer_brightness": outer_bri,
+                    "inner_brightness": inner_bri,
+                    "debug_brightness": debug_bri,
                 })
             idx += 1
 
