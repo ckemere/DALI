@@ -148,11 +148,17 @@ def _parse_rate_limit(err_str):
 def capture_videos(phase_dirs, ccxml_path, video_dir,
                    calibration_path=None, camera_device=0,
                    phase_durations=None, phase_fps=None,
-                   compile_only=False, results_csv=None):
+                   compile_only=False, results_csv=None,
+                   keep_builds_root=None):
     """
     Compile, flash, and record videos for each student across all phases.
 
     Videos are saved as <video_dir>/<phase>/<student>.mp4.
+
+    If ``keep_builds_root`` is set, build artifacts (including the .out
+    file) are written to ``<keep_builds_root>/<student>/<phase>/`` and
+    are not deleted after each student.  Otherwise builds use a
+    temporary directory that is removed once the phase is recorded.
     """
     if phase_durations is None:
         phase_durations = dict(DEFAULT_PHASE_DURATION)
@@ -195,10 +201,21 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
                 "compile_success": False,
                 "compile_errors": "",
                 "flash_success": False,
+                "flash_errors": "",
+                "build_dir": "",
                 "video_file": "",
             }
 
-            build_dir = tempfile.mkdtemp(prefix=f"grade_{student}_{phase}_")
+            if keep_builds_root:
+                build_dir = os.path.join(
+                    keep_builds_root, student, phase)
+                os.makedirs(build_dir, exist_ok=True)
+                cleanup_build_dir = False
+            else:
+                build_dir = tempfile.mkdtemp(
+                    prefix=f"grade_{student}_{phase}_")
+                cleanup_build_dir = True
+            row["build_dir"] = build_dir
 
             try:
                 # Extract
@@ -258,9 +275,16 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
                         if f_ok:
                             print(f"  {phase}: flash PASS")
                         else:
+                            err_text = (f_err or f_out or "").strip()
+                            error_lines = (
+                                err_text.split("\n") if err_text else [])
+                            row["flash_errors"] = "\n".join(error_lines[:5])
                             print(f"  {phase}: flash FAIL")
+                            if error_lines:
+                                print(f"    {error_lines[0]}")
                     except subprocess.TimeoutExpired:
                         row["flash_success"] = False
+                        row["flash_errors"] = "Flash timed out"
                         print(f"  {phase}: flash TIMEOUT")
 
                     if rec_proc is not None:
@@ -272,7 +296,8 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
                             print(f"  {phase}: video FAILED ({v_err})")
 
             finally:
-                shutil.rmtree(build_dir, ignore_errors=True)
+                if cleanup_build_dir:
+                    shutil.rmtree(build_dir, ignore_errors=True)
 
             results.append(row)
         print()
@@ -281,7 +306,8 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
     if results and results_csv:
         fieldnames = ["student", "phase", "zip_file",
                       "compile_success", "compile_errors",
-                      "flash_success", "video_file"]
+                      "flash_success", "flash_errors",
+                      "build_dir", "video_file"]
         with open(results_csv, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames,
                                     extrasaction="ignore")
@@ -716,6 +742,12 @@ def main():
     parser.add_argument(
         "--compile-only", action="store_true",
         help="Only compile, do not flash or record")
+    parser.add_argument(
+        "--keep-builds", metavar="DIR",
+        help="If set, build artifacts (.out, .map, .o) for each "
+             "student/phase are written to DIR/<student>/<phase>/ "
+             "and not deleted after capture, so failures can be "
+             "re-flashed by hand")
 
     # Video recording.
     parser.add_argument(
@@ -797,6 +829,11 @@ def main():
             print("Error: provide at least one --phaseN-dir")
             sys.exit(1)
         os.makedirs(args.video_dir, exist_ok=True)
+        keep_builds_root = (
+            os.path.abspath(args.keep_builds)
+            if args.keep_builds else None)
+        if keep_builds_root:
+            os.makedirs(keep_builds_root, exist_ok=True)
         capture_videos(
             phase_dirs=phase_dirs,
             ccxml_path=args.ccxml,
@@ -807,6 +844,7 @@ def main():
             phase_fps=phase_fps,
             compile_only=args.compile_only,
             results_csv=args.results_csv,
+            keep_builds_root=keep_builds_root,
         )
         sys.exit(0)
 

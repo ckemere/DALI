@@ -130,6 +130,37 @@ python -m grading.lab2.grade --capture \
     ...
 ```
 
+**Keeping build artifacts for debugging:**
+
+By default each student/phase compiles into a `tempfile.mkdtemp` that is
+deleted as soon as the phase is recorded.  Pass `--keep-builds DIR` to
+keep the `.out` (and `.map`, intermediate `.o`) files around so you can
+re-flash a failing student by hand:
+
+```bash
+python -m grading.lab2.grade --capture \
+    --phase1-dir ./phase1_submissions \
+    --phase2-dir ./phase2_submissions \
+    --phase3-dir ./phase3_submissions \
+    --ccxml "$DALI_ROOT/MSPM0G3507.ccxml" \
+    --video-dir ./videos \
+    --keep-builds ./builds \
+    --results-csv capture_results.csv
+```
+
+Each build is then at `./builds/<student>/<phase>/<lab_output>.out`,
+e.g. `./builds/alice/phase3/Lab_2_3.out`.  Re-flash by hand with:
+
+```bash
+$DSLITE_PATH load -c "$DALI_ROOT/MSPM0G3507.ccxml" \
+    -f ./builds/<student>/phase3/Lab_2_3.out
+```
+
+The `capture_results.csv` produced by the run also gains a `build_dir`
+column pointing at the directory for each row, plus a `flash_errors`
+column with the first lines of DSLite stderr/stdout for any failed
+flash (no more silent "flash FAIL").
+
 ### Step 3: Analyze Pre-Recorded Videos
 
 If you already have videos recorded (e.g., from a TA session):
