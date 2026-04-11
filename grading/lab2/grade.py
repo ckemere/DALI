@@ -86,17 +86,26 @@ DEFAULT_PHASE_DURATION = {
     "phase3": 150,
 }
 
-# Default recording frame rates.  Phase 3 ideally wants high FPS so
-# individual PWM cycles are visible, but built-in webcams typically
-# cap at 30 fps and the analyzer has a low-fps fallback that infers
-# PWM from brightness reduction instead.  Override with --phase3-fps
-# if your camera supports it (60+ for partial PWM cycle resolution,
-# 120+ for clean FFT-based PWM frequency estimation).
+# Default recording frame rates.  Phase 1 and 2 only need to capture
+# the 1 Hz LED clock behavior, so 5 fps is plenty (well above the
+# Nyquist rate of 2 Hz) and saves disk space and analysis time.
+# Phase 3 ideally wants high FPS so individual PWM cycles are visible,
+# but built-in webcams typically cap at 30 fps and the analyzer has a
+# low-fps fallback that infers PWM from brightness reduction instead.
+# Override with --phaseN-fps if your camera supports it (60+ for
+# partial PWM cycle resolution, 120+ for FFT-based PWM frequency
+# estimation).
 DEFAULT_PHASE_FPS = {
-    "phase1": 30,
-    "phase2": 30,
+    "phase1": 5,
+    "phase2": 5,
     "phase3": 30,
 }
+
+# Default capture resolution.  640x480 keeps file sizes manageable,
+# is supported at 30+ fps by virtually every webcam, and gives the
+# LED detector plenty of pixels.  Override with --video-size or the
+# DALI_FFMPEG_VIDEO_SIZE env var.
+DEFAULT_VIDEO_SIZE = "640x480"
 
 
 def _match_students_across_phases(phase_dirs):
@@ -153,7 +162,7 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
                    calibration_path=None, camera_device=0,
                    phase_durations=None, phase_fps=None,
                    compile_only=False, results_csv=None,
-                   keep_builds_root=None):
+                   keep_builds_root=None, video_size=None):
     """
     Compile, flash, and record videos for each student across all phases.
 
@@ -163,6 +172,10 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
     file) are written to ``<keep_builds_root>/<student>/<phase>/`` and
     are not deleted after each student.  Otherwise builds use a
     temporary directory that is removed once the phase is recorded.
+
+    ``video_size`` is forwarded to start_recording() as the requested
+    capture resolution (e.g. ``"640x480"``).  Pass ``None`` or an empty
+    string to let ffmpeg/avfoundation pick.
     """
     if phase_durations is None:
         phase_durations = dict(DEFAULT_PHASE_DURATION)
@@ -267,10 +280,13 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
                     duration = phase_durations.get(phase, 150)
                     fps = phase_fps.get(phase, 30)
 
-                    print(f"  {phase}: recording {duration}s @ {fps}fps...")
+                    size_note = f" {video_size}" if video_size else ""
+                    print(f"  {phase}: recording {duration}s "
+                          f"@ {fps}fps{size_note}...")
                     rec_proc = start_recording(
                         video_path, duration, camera_device,
-                        framerate=fps)
+                        framerate=fps,
+                        video_size=video_size or None)
 
                     try:
                         f_ok, f_out, f_err = flash_firmware(
@@ -762,12 +778,23 @@ def main():
         "--camera", type=int, default=0,
         help="Camera device index (default: 0)")
     parser.add_argument(
+        "--phase1-fps", type=int, default=5,
+        help="Recording frame rate for Phase 1 (default: 5 — the "
+             "1 Hz LED clock is well above this Nyquist limit)")
+    parser.add_argument(
+        "--phase2-fps", type=int, default=5,
+        help="Recording frame rate for Phase 2 (default: 5)")
+    parser.add_argument(
         "--phase3-fps", type=int, default=30,
         help="Recording frame rate for Phase 3 (default: 30 — works "
              "on built-in webcams; the analyzer has a low-fps fallback "
              "that infers PWM from brightness reduction.  Set to 120+ "
              "if your camera supports it for direct PWM cycle "
              "observation and FFT-based frequency estimation)")
+    parser.add_argument(
+        "--video-size", default=DEFAULT_VIDEO_SIZE,
+        help=f"Capture resolution WxH (default: {DEFAULT_VIDEO_SIZE}). "
+             "Pass an empty string to let ffmpeg/avfoundation pick.")
     parser.add_argument(
         "--phase3-duration", type=int, default=150,
         help="Recording duration for Phase 3 in seconds (default: 150)")
@@ -827,6 +854,8 @@ def main():
 
     # Build per-phase fps/duration overrides.
     phase_fps = dict(DEFAULT_PHASE_FPS)
+    phase_fps["phase1"] = args.phase1_fps
+    phase_fps["phase2"] = args.phase2_fps
     phase_fps["phase3"] = args.phase3_fps
     phase_durations = dict(DEFAULT_PHASE_DURATION)
     phase_durations["phase3"] = args.phase3_duration
@@ -853,6 +882,7 @@ def main():
             compile_only=args.compile_only,
             results_csv=args.results_csv,
             keep_builds_root=keep_builds_root,
+            video_size=args.video_size or None,
         )
         sys.exit(0)
 
