@@ -206,31 +206,127 @@ def _analyze_pwm(raw_timeline, analyzer):
     avg_cv = np.mean(cvs)
     avg_duty = np.mean(duty_cycles) * 100  # as percentage
 
-    # PWM is detected if there's significant brightness variation.
-    # With 25% duty cycle, we expect CV > 0.3 typically.
+    # ── Brightness reduction (works at any fps) ──
+    # Compare average brightness of active LEDs to the threshold
+    # (which represents the on/off boundary; ~1.5x threshold ≈ full).
+    all_active_brightness = np.concatenate(all_brightness_series)
+    avg_brightness = np.mean(all_active_brightness)
+    ref_brightness = max(outer_thr, inner_thr)
+    full_brightness_estimate = ref_brightness * 1.5
+    brightness_ratio = (avg_brightness / full_brightness_estimate
+                        if full_brightness_estimate > 0 else 1.0)
+    reduction = max(0.0, (1.0 - brightness_ratio) * 100.0)
+    results["brightness_reduction_pct"] = f"{reduction:.0f}%"
+
+    # ── Branch: low-fps vs high-fps analysis ──
+    # Above ~60 fps the camera can resolve individual PWM cycles, so we
+    # use the CV / FFT path.  At lower frame rates (typical built-in
+    # webcams cap at 30 fps) the camera integrates over many PWM
+    # periods per frame, so CV becomes a *flicker* signal and we infer
+    # PWM presence from brightness reduction instead.
+    LOW_FPS_THRESHOLD = 60.0
+    low_fps_mode = fps < LOW_FPS_THRESHOLD
+
+    if low_fps_mode:
+        REDUCTION_PASS = 25.0  # >=25% dimmer than full → clearly PWMing
+        REDUCTION_FAIL = 10.0  # <10% reduction → essentially full-on
+        CV_STEADY = 0.10       # smooth at 30 fps → PWM > camera Nyquist
+        CV_FLICKER = 0.25      # ripply at 30 fps → PWM in/below visible band
+
+        if reduction >= REDUCTION_PASS:
+            results["reduced_brightness"] = (
+                f"PASS (avg brightness {brightness_ratio*100:.0f}% of "
+                f"full, {reduction:.0f}% reduction)"
+            )
+            results["pwm_detected"] = (
+                f"PASS (inferred from brightness reduction at "
+                f"{fps:.0f} fps; individual PWM cycles not resolvable)"
+            )
+        elif reduction >= REDUCTION_FAIL:
+            results["reduced_brightness"] = (
+                f"PARTIAL (only {reduction:.0f}% brightness reduction)"
+            )
+            results["pwm_detected"] = (
+                f"PARTIAL (mild dimming observed at {fps:.0f} fps)"
+            )
+        else:
+            results["reduced_brightness"] = (
+                f"FAIL (LED at {brightness_ratio*100:.0f}% of full; "
+                f"no clear dimming)"
+            )
+            results["pwm_detected"] = (
+                f"FAIL (no observable dimming at {fps:.0f} fps)"
+            )
+
+        # Duty cycle estimate is unreliable at low fps; report it as
+        # an estimate so graders don't over-trust it.
+        results["pwm_duty_cycle_pct"] = (
+            f"~{avg_duty:.0f}% (low-fps estimate)"
+        )
+
+        # Flicker assessment via CV at the camera frame rate.  At
+        # 30 fps, low CV means PWM frequency is well above the camera's
+        # Nyquist (15 Hz) — and incidentally above the human flicker
+        # fusion threshold of ~50 Hz.  High CV means the PWM is slow
+        # enough to alias into the camera's band, which means it's
+        # also visible to humans.
+        if reduction >= REDUCTION_FAIL:
+            if avg_cv < CV_STEADY:
+                results["pwm_frequency_hz"] = (
+                    f">{fps/2:.0f} (above {fps:.0f} fps Nyquist)"
+                )
+                results["no_visible_flicker"] = (
+                    f"PASS (steady at {fps:.0f} fps, CV={avg_cv:.2f}; "
+                    f"PWM frequency above human flicker threshold)"
+                )
+            elif avg_cv < CV_FLICKER:
+                results["pwm_frequency_hz"] = (
+                    f"~{fps/2:.0f} Hz (near {fps:.0f} fps Nyquist)"
+                )
+                results["no_visible_flicker"] = (
+                    f"PARTIAL (some fluctuation at {fps:.0f} fps, "
+                    f"CV={avg_cv:.2f})"
+                )
+            else:
+                results["pwm_frequency_hz"] = (
+                    f"<{fps/2:.0f} Hz (aliased at {fps:.0f} fps)"
+                )
+                results["no_visible_flicker"] = (
+                    f"FAIL (high fluctuation at {fps:.0f} fps, "
+                    f"CV={avg_cv:.2f}; PWM likely below visible "
+                    f"flicker threshold)"
+                )
+        else:
+            # No dimming observed → no PWM running → trivially no
+            # flicker, but also no power savings (which the LLM
+            # rubric will catch).
+            results["pwm_frequency_hz"] = "N/A (no PWM detected)"
+            results["no_visible_flicker"] = (
+                "PASS (no PWM, no flicker — but also no power savings)"
+            )
+
+        return results
+
+    # ── High-fps mode: original CV / FFT logic ──
+    # PWM is detected if there's significant brightness variation
+    # frame-to-frame.  With a 25% duty cycle, expect CV > 0.3.
     pwm_threshold_cv = 0.15
     pwm_detected = avg_cv > pwm_threshold_cv
 
     if pwm_detected:
         results["pwm_detected"] = f"PASS (CV={avg_cv:.2f})"
     else:
-        results["pwm_detected"] = f"FAIL (CV={avg_cv:.2f}, threshold={pwm_threshold_cv})"
+        results["pwm_detected"] = (
+            f"FAIL (CV={avg_cv:.2f}, threshold={pwm_threshold_cv})"
+        )
 
-    # ── Duty cycle ──
+    # Duty cycle (high-fps).
     results["pwm_duty_cycle_pct"] = f"{avg_duty:.0f}%"
-
-    # ── Brightness reduction ──
-    # Compare average brightness of active LEDs to the threshold
-    # (which represents full-on brightness).
-    all_active_brightness = np.concatenate(all_brightness_series)
-    avg_brightness = np.mean(all_active_brightness)
-    ref_brightness = max(outer_thr, inner_thr)
-    reduction = (1 - avg_brightness / (ref_brightness * 1.5)) * 100
-    results["brightness_reduction_pct"] = f"{max(0, reduction):.0f}%"
 
     if avg_duty < 80:
         results["reduced_brightness"] = (
-            f"PASS (avg duty={avg_duty:.0f}%, brightness_reduction={max(0, reduction):.0f}%)"
+            f"PASS (avg duty={avg_duty:.0f}%, "
+            f"brightness_reduction={reduction:.0f}%)"
         )
     else:
         results["reduced_brightness"] = (

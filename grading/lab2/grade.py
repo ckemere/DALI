@@ -86,12 +86,16 @@ DEFAULT_PHASE_DURATION = {
     "phase3": 150,
 }
 
-# Default recording frame rates.  Phase 3 uses high FPS for PWM
-# flicker detection.
+# Default recording frame rates.  Phase 3 ideally wants high FPS so
+# individual PWM cycles are visible, but built-in webcams typically
+# cap at 30 fps and the analyzer has a low-fps fallback that infers
+# PWM from brightness reduction instead.  Override with --phase3-fps
+# if your camera supports it (60+ for partial PWM cycle resolution,
+# 120+ for clean FFT-based PWM frequency estimation).
 DEFAULT_PHASE_FPS = {
     "phase1": 30,
     "phase2": 30,
-    "phase3": 120,
+    "phase3": 30,
 }
 
 
@@ -758,8 +762,12 @@ def main():
         "--camera", type=int, default=0,
         help="Camera device index (default: 0)")
     parser.add_argument(
-        "--phase3-fps", type=int, default=120,
-        help="Recording frame rate for Phase 3 (default: 120)")
+        "--phase3-fps", type=int, default=30,
+        help="Recording frame rate for Phase 3 (default: 30 — works "
+             "on built-in webcams; the analyzer has a low-fps fallback "
+             "that infers PWM from brightness reduction.  Set to 120+ "
+             "if your camera supports it for direct PWM cycle "
+             "observation and FFT-based frequency estimation)")
     parser.add_argument(
         "--phase3-duration", type=int, default=150,
         help="Recording duration for Phase 3 in seconds (default: 150)")
