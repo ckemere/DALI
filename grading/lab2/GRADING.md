@@ -138,9 +138,11 @@ Adjust focus and aim until:
 - Focus is sharp enough to distinguish individual LEDs
 - No serious vignetting in the corners where LEDs sit
 
-Then **don't move the camera again** until after Step 4 (calibration).
-The calibration depends on the LEDs being in the same pixel locations
-as in the captured videos.
+**Don't move the camera between students** during the Step 3 capture
+run.  All recorded videos must share the same LED pixel locations,
+because Step 4 calibration is per-batch, not per-student.  Once Step 3
+is finished you can put the rig away — calibration in Step 4 can be
+done from any of the recorded videos at any time.
 
 ### Step 3 — Compile, flash, and record videos
 
@@ -251,15 +253,102 @@ becomes `NO_DATA` → 0 points downstream.
 
 ### Step 4 — Calibrate the camera
 
-After Step 3 finishes (and **with the camera still in the same
-position**), capture a calibration:
+The calibration step records the on-screen positions of all 24 LEDs
+plus the debug LED, and the brightness thresholds the analyzer uses
+to decide whether each LED is on or off.  The output is a single
+`calibration.json` consumed by Step 5.
+
+You can calibrate from either a live camera or a pre-recorded video.
+
+#### Option A — Calibrate from a pre-recorded video (recommended)
+
+Once Step 3 has finished, you can calibrate against any of the
+captured videos.  This is the easiest path because you don't need
+the camera/board still set up, and you can re-do calibration any time
+without re-flashing.  Pick a video where the LED clock is clearly
+running and most LEDs are visible — typically a Phase 1 or Phase 2
+video for a student you know works:
+
+```bash
+python -m grading.calibrate \
+    --video ./videos/phase1/<good_student>.mp4 \
+    --output ./calibration.json
+```
+
+The video loops automatically, so you have unlimited time to mark
+positions.  Useful keys in the GUI:
+
+- **Left-click** to place an LED marker (debug LED first, then 12
+  outer-ring LEDs starting from the 12 o'clock position going
+  clockwise, then 12 inner-ring LEDs).
+- **Drag** an existing marker to nudge it.
+- **Right-click** to delete the nearest marker.
+- **`f`** to freeze/unfreeze the current frame — handy for clicking
+  on a specific moment when the LED you want is lit.
+- **`b`** to print a brightness summary across all marked LEDs;
+  this also suggests a threshold based on the gap between the
+  dimmest "on" reading and the brightest "off" reading.
+- **`d`** to cycle which threshold the `+`/`-` keys adjust
+  (outer / inner / debug).
+- **`+` / `-`** to nudge the selected threshold up/down by 5.
+- **`t`** to toggle a binary-threshold view of the frame so you
+  can see which pixels the current threshold considers "on."
+- **`s`** to save the calibration JSON and exit, **`q`** to quit
+  without saving.
+
+Threshold tuning workflow that usually works:
+1. Mark all 25 LEDs (debug + 24 ring) using `f` to freeze on a
+   helpful frame.
+2. Unfreeze and let the video loop a few times so the LEDs cycle
+   through their on/off states.
+3. Press `b` to see the brightness range.  The summary suggests a
+   threshold value.
+4. Cycle `d` between outer/inner/debug and use `+`/`-` to set
+   each threshold to about the suggested midpoint.
+5. Press `t` to verify visually that on LEDs are above threshold
+   and off LEDs are below.
+6. Press `s` to save.
+
+#### Option B — Calibrate from a live camera
+
+If you still have the camera and board set up at the end of Step 3
+(and **the camera has not moved since capture**), you can calibrate
+from the live feed instead.  This is the original Lab 1 workflow:
 
 ```bash
 python -m grading.calibrate --camera 0 --output ./calibration.json
 ```
 
-This saves the LED ring positions and brightness thresholds that the
-analyzer uses to find each LED in the frame.
+All the same keyboard controls apply.  Note that with a live camera
+the LEDs are only in their current state at the moment you click —
+freezing (`f`) and the brightness summary (`b`) are even more useful
+here.
+
+If you want the live feed but the board isn't currently running a
+known-good firmware, the calibrator can flash one for you first:
+
+```bash
+# Flash a pre-compiled binary
+python -m grading.calibrate --camera 0 \
+    --flash ./builds/<good_student>/phase1/Lab_2_1.out \
+    --output ./calibration.json
+
+# Or compile-and-flash a student submission zip directly
+python -m grading.calibrate --camera 0 \
+    --submission ./phase1_submissions/<good_student>.zip \
+    --lab lab2 \
+    --output ./calibration.json
+```
+
+#### Calibration sanity check
+
+Before moving on to Step 5, open `calibration.json` and confirm:
+
+- `outer_ring` and `inner_ring` each have **12** entries
+- `debug_led` has **1** entry
+- `outer_threshold`, `inner_threshold`, and `debug_threshold` are
+  somewhere in the 30–200 range (default 128 means you didn't
+  actually tune them — go back and press `b`)
 
 ### Step 5 — Analyze pre-recorded videos
 
