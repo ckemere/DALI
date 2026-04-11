@@ -13,6 +13,7 @@ Used by both the DALI web app (compile queue) and grading workflows.
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import time
@@ -429,12 +430,43 @@ def finish_recording(proc, duration=VIDEO_DURATION):
         return False, "Video recording timed out"
 
 
+# Canvas "Download Submissions" wraps every zip with a prefix like
+#   "lastnamefirstname[_LATE]_<submission_id>_<attachment_id>_<original>"
+# e.g. "addepallimilan_78839_7441683_Lab_2_-_Phase_1_ma200.zip"
+#      "anginaromanus_LATE_78843_7461310_Lab_2_-_Phase_1_sra12.zip"
+# We want just the leading "<lastnamefirstname>" segment so the same
+# student is matched across the three phase assignments.
+_CANVAS_RE = re.compile(r"^([A-Za-z][A-Za-z\-]*)(?:_LATE)?_\d+_\d+_")
+
+
 def student_name_from_zip(zip_name):
     """
-    Extract a student identifier from the zip filename.
-    Strips common lab prefixes.
+    Extract a canonical student identifier from a submission filename.
+
+    Handles two conventions:
+
+    - Canvas "Download Submissions" export names of the form
+      ``<name>[_LATE]_<submission_id>_<attachment_id>_<original>`` —
+      returns just ``<name>`` lowercased, so the same student is
+      matched across all three phase assignments even though Canvas
+      generates different submission/attachment IDs per assignment
+      and may append a ``-1``/``-2`` suffix for resubmissions.
+
+    - Student-renamed files with a known ``Lab_N_`` prefix — strips
+      the prefix, preserving legacy Lab 1 workflows.
+
+    Accepts either a full zip filename (``foo.zip``) or a bare stem
+    (``foo``) — useful when normalizing keys already extracted from
+    video filenames.
     """
     base = os.path.splitext(zip_name)[0]
+
+    # Canvas wrapper takes priority.
+    m = _CANVAS_RE.match(base)
+    if m:
+        return m.group(1).lower()
+
+    # Fallback: strip known lab prefixes (Lab 1 workflow).
     for prefix in ("Lab_1_", "Lab 1_", "lab1_", "lab_1_",
                    "Lab_2_", "Lab 2_", "lab2_", "lab_2_",
                    "Lab_3_", "Lab 3_", "lab3_", "lab_3_"):

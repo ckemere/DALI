@@ -34,6 +34,7 @@ import sys
 
 import yaml
 
+from assess.build import student_name_from_zip
 from assess.lab2_score import (
     PHASE1_VIDEO_RUBRIC_ITEMS,
     PHASE1_VIDEO_RUBRIC_POINTS,
@@ -48,6 +49,87 @@ from assess.lab2_code_review import (
     RUBRIC_POINTS as LLM_RUBRIC_POINTS,
     RUBRIC_DESCRIPTIONS as LLM_RUBRIC_DESCRIPTIONS,
 )
+
+
+def _normalize_video_results(raw):
+    """
+    Collapse Canvas-wrapped student keys in a video_results.json to
+    canonical student names and merge their phase entries.
+
+    Canvas "Download Submissions" produces a different submission and
+    attachment ID per phase assignment, so the same student ends up
+    under three different keys (e.g. ``alice_78839_7441683_Lab_2_-_Phase_1_x``
+    and ``alice_78839_7441690_Lab_2_-_Phase_2_x``) with only one phase
+    populated each.  This function joins them back together.
+
+    When the same (canonical_student, phase) pair shows up more than
+    once — e.g. a resubmission with a ``-1`` suffix — the entry that
+    sorts later wins (Canvas's attachment IDs are monotonic, so
+    lexicographic order ≈ chronological order).
+    """
+    merged = {}
+    dropped = 0
+    for raw_key in sorted(raw.keys()):
+        canon = student_name_from_zip(raw_key)
+        phases = raw.get(raw_key) or {}
+        if not isinstance(phases, dict):
+            continue
+        dest = merged.setdefault(canon, {})
+        for phase, scores in phases.items():
+            if phase in dest:
+                dropped += 1
+            dest[phase] = scores
+    if len(merged) < len(raw):
+        print(f"  Normalized video_results: {len(raw)} raw keys → "
+              f"{len(merged)} canonical students"
+              + (f" ({dropped} duplicate phase entries, later wins)"
+                 if dropped else ""))
+    return merged
+
+
+def _normalize_llm_results(raw):
+    """
+    Collapse Canvas-wrapped student keys in an llm_results.json.
+
+    LLM review assembles per-student code from all phases found under
+    a single key, so if the upstream capture/review stage was run with
+    broken student matching each "student" key only contains code from
+    one phase and most rubric items will be FAIL/UNCLEAR.  We merge
+    per-item verdicts across keys that share a canonical name, picking
+    whichever variant actually has a PASS/FAIL verdict.  This is a
+    best-effort repair; re-running the LLM step after this fix lands
+    will give better results.
+    """
+    merged = {}
+    for raw_key in sorted(raw.keys()):
+        canon = student_name_from_zip(raw_key)
+        items = raw.get(raw_key) or {}
+        if not isinstance(items, dict):
+            continue
+        dest = merged.setdefault(canon, {})
+        for item_id, entry in items.items():
+            existing = dest.get(item_id)
+            if existing is None:
+                dest[item_id] = entry
+                continue
+            # Prefer entries with a concrete verdict over UNCLEAR/missing.
+            def _rank(e):
+                if not isinstance(e, dict):
+                    return 0
+                v = str(e.get("verdict", "")).upper()
+                if v == "PASS":
+                    return 3
+                if v == "FAIL":
+                    return 2
+                if v:
+                    return 1
+                return 0
+            if _rank(entry) > _rank(existing):
+                dest[item_id] = entry
+    if len(merged) < len(raw):
+        print(f"  Normalized llm_results: {len(raw)} raw keys → "
+              f"{len(merged)} canonical students")
+    return merged
 
 # For Phases 1 and 2, the video rubric items are the same as Lab 1.
 # Phase 3 adds PWM-specific items.
@@ -395,13 +477,17 @@ def main():
     if args.video_results:
         with open(args.video_results, "r") as f:
             video_results = json.load(f)
-        print(f"Video results: {len(video_results)} students")
+        print(f"Video results: {len(video_results)} raw keys")
+        video_results = _normalize_video_results(video_results)
+        print(f"Video results: {len(video_results)} students after merge")
 
     llm_results = {}
     if args.llm_results:
         with open(args.llm_results, "r") as f:
             llm_results = json.load(f)
-        print(f"LLM results: {len(llm_results)} students")
+        print(f"LLM results: {len(llm_results)} raw keys")
+        llm_results = _normalize_llm_results(llm_results)
+        print(f"LLM results: {len(llm_results)} students after merge")
 
     if not video_results and not llm_results:
         print("Error: provide --video-results and/or --llm-results")
