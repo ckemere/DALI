@@ -51,24 +51,29 @@ PHASE3_SCORE_FIELDS = list(LAB1_SCORE_FIELDS) + [
 ]
 
 PHASE3_VIDEO_RUBRIC_ITEMS = list(LAB1_VIDEO_RUBRIC_ITEMS) + [
-    "pwm_detected",
     "reduced_brightness",
     "no_visible_flicker",
 ]
 
 PHASE3_VIDEO_RUBRIC_POINTS = dict(LAB1_VIDEO_RUBRIC_POINTS)
 PHASE3_VIDEO_RUBRIC_POINTS.update({
-    "pwm_detected":       1,
     "reduced_brightness":  1,
     "no_visible_flicker":  1,
 })
 
 PHASE3_VIDEO_RUBRIC_DESCRIPTIONS = dict(LAB1_VIDEO_RUBRIC_DESCRIPTIONS)
 PHASE3_VIDEO_RUBRIC_DESCRIPTIONS.update({
-    "pwm_detected":       "PWM modulation detected in LED brightness",
     "reduced_brightness":  "LED brightness clearly reduced (duty cycle < 100%)",
     "no_visible_flicker":  "No visible flicker (PWM frequency sufficiently high)",
 })
+
+# `pwm_detected` is still computed and written to PHASE3_SCORE_FIELDS as
+# a diagnostic, but it's deliberately excluded from the rubric: at the
+# 30 fps sampling we typically use, the low-fps path in _analyze_pwm
+# can't resolve individual PWM cycles and just infers pwm_detected
+# from reduced_brightness, so it would be a double-count of the same
+# signal.  Graders should look at reduced_brightness for the
+# dimming-works check.
 
 PHASE3_VIDEO_RUBRIC_MAX_POINTS = sum(
     PHASE3_VIDEO_RUBRIC_POINTS.get(k, 1) for k in PHASE3_VIDEO_RUBRIC_ITEMS
