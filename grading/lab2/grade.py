@@ -409,8 +409,17 @@ def analyze_videos(video_dir, calibration_path, results_json,
             try:
                 timeline = active_analyzer.extract_timeline(video_path)
                 if phase == "phase3":
+                    # Prefer the Phase 2 baseline (timer-interrupt
+                    # timing → cleaner LED states) but fall back to
+                    # Phase 1 if Phase 2 is missing or errored.
+                    baseline = None
+                    for src_phase in ("phase2", "phase1"):
+                        src = all_results[student].get(src_phase, {})
+                        if isinstance(src, dict) and "_brightness_baseline" in src:
+                            baseline = src["_brightness_baseline"]
+                            break
                     scores, changes, _, _ = score_phase3(
-                        timeline, active_analyzer)
+                        timeline, active_analyzer, baseline=baseline)
                     print(f"  PWM={scores.get('pwm_detected', '?')}  "
                           f"flicker={scores.get('no_visible_flicker', '?')}")
                 elif phase == "phase1":

@@ -101,7 +101,7 @@ def score_phase2(timeline):
     return lab1_score(timeline)
 
 
-def _analyze_pwm(raw_timeline, analyzer):
+def _analyze_pwm(raw_timeline, analyzer, baseline=None):
     """
     Analyze raw brightness data for PWM characteristics.
 
@@ -114,6 +114,14 @@ def _analyze_pwm(raw_timeline, analyzer):
                       includes raw brightness values (not just bool).
         analyzer:     The VideoAnalyzer instance (for LED positions and
                       thresholds).
+        baseline:     Optional per-ring ON/OFF brightness summary from
+                      an earlier phase (output of
+                      lab1_score._brightness_baseline).  When present,
+                      the `reduced_brightness` check compares Phase 3
+                      ON-LED brightness to this reference instead of
+                      guessing "full" from the calibration threshold,
+                      which is much more reliable across boards and
+                      lighting conditions.
 
     Returns:
         dict with keys: pwm_detected, pwm_frequency_hz,
@@ -206,17 +214,57 @@ def _analyze_pwm(raw_timeline, analyzer):
     avg_cv = np.mean(cvs)
     avg_duty = np.mean(duty_cycles) * 100  # as percentage
 
-    # ── Brightness reduction (works at any fps) ──
-    # Compare average brightness of active LEDs to the threshold
-    # (which represents the on/off boundary; ~1.5x threshold ≈ full).
-    all_active_brightness = np.concatenate(all_brightness_series)
-    avg_brightness = np.mean(all_active_brightness)
-    ref_brightness = max(outer_thr, inner_thr)
-    full_brightness_estimate = ref_brightness * 1.5
-    brightness_ratio = (avg_brightness / full_brightness_estimate
-                        if full_brightness_estimate > 0 else 1.0)
-    reduction = max(0.0, (1.0 - brightness_ratio) * 100.0)
-    results["brightness_reduction_pct"] = f"{reduction:.0f}%"
+    # ── Brightness reduction ──
+    # Preferred path: compare Phase 3 ON-LED brightness against the
+    # per-ring "ON" distribution measured during Phase 1/2 (when the
+    # LEDs were at full brightness).  This is calibration-invariant
+    # and robust to the Phase 3 threshold being tuned for PWM'd LEDs.
+    #
+    # Fallback path (no baseline): guess "full" as ~1.5x the threshold.
+    # This is sensitive to calibration choice and systematically
+    # under-reports reduction when the Phase 3 threshold has been
+    # lowered to catch PWM'd LEDs, but it's the best we can do without
+    # a reference.
+    reduction_source = "threshold"
+    baseline_ratio = None
+    if (baseline is not None
+            and baseline.get("outer_on") is not None
+            and baseline.get("inner_on") is not None):
+        ring_ratios = []
+        detail_bits = []
+        for ring_name, bri_arr, low in (
+            ("outer", outer_bri, low_outer),
+            ("inner", inner_bri, low_inner),
+        ):
+            ring_on_samples = bri_arr[bri_arr > low]
+            base = baseline.get(ring_name + "_on") or {}
+            base_mean = base.get("mean", 0.0)
+            if ring_on_samples.size > 0 and base_mean > 0:
+                ring_mean = float(np.mean(ring_on_samples))
+                ring_ratios.append(ring_mean / base_mean)
+                detail_bits.append(
+                    f"{ring_name} {ring_mean:.0f}/{base_mean:.0f}"
+                )
+        if ring_ratios:
+            baseline_ratio = float(np.mean(ring_ratios))
+            brightness_ratio = baseline_ratio
+            reduction = max(0.0, (1.0 - brightness_ratio) * 100.0)
+            reduction_source = "baseline"
+            reduction_detail = ", ".join(detail_bits)
+
+    if reduction_source == "threshold":
+        all_active_brightness = np.concatenate(all_brightness_series)
+        avg_brightness = np.mean(all_active_brightness)
+        ref_brightness = max(outer_thr, inner_thr)
+        full_brightness_estimate = ref_brightness * 1.5
+        brightness_ratio = (avg_brightness / full_brightness_estimate
+                            if full_brightness_estimate > 0 else 1.0)
+        reduction = max(0.0, (1.0 - brightness_ratio) * 100.0)
+        reduction_detail = f"vs {ref_brightness:.0f} threshold"
+
+    results["brightness_reduction_pct"] = (
+        f"{reduction:.0f}% ({reduction_source})"
+    )
 
     # ── Branch: low-fps vs high-fps analysis ──
     # Above ~60 fps the camera can resolve individual PWM cycles, so we
@@ -233,10 +281,12 @@ def _analyze_pwm(raw_timeline, analyzer):
         CV_STEADY = 0.10       # smooth at 30 fps → PWM > camera Nyquist
         CV_FLICKER = 0.25      # ripply at 30 fps → PWM in/below visible band
 
+        ref_label = ("Phase 1/2 baseline" if reduction_source == "baseline"
+                     else "full-on estimate")
         if reduction >= REDUCTION_PASS:
             results["reduced_brightness"] = (
-                f"PASS (avg brightness {brightness_ratio*100:.0f}% of "
-                f"full, {reduction:.0f}% reduction)"
+                f"PASS ({brightness_ratio*100:.0f}% of {ref_label}, "
+                f"{reduction:.0f}% reduction; {reduction_detail})"
             )
             results["pwm_detected"] = (
                 f"PASS (inferred from brightness reduction at "
@@ -244,15 +294,16 @@ def _analyze_pwm(raw_timeline, analyzer):
             )
         elif reduction >= REDUCTION_FAIL:
             results["reduced_brightness"] = (
-                f"PARTIAL (only {reduction:.0f}% brightness reduction)"
+                f"PARTIAL ({brightness_ratio*100:.0f}% of {ref_label}, "
+                f"only {reduction:.0f}% reduction; {reduction_detail})"
             )
             results["pwm_detected"] = (
                 f"PARTIAL (mild dimming observed at {fps:.0f} fps)"
             )
         else:
             results["reduced_brightness"] = (
-                f"FAIL (LED at {brightness_ratio*100:.0f}% of full; "
-                f"no clear dimming)"
+                f"FAIL ({brightness_ratio*100:.0f}% of {ref_label}; "
+                f"no clear dimming; {reduction_detail})"
             )
             results["pwm_detected"] = (
                 f"FAIL (no observable dimming at {fps:.0f} fps)"
@@ -323,7 +374,27 @@ def _analyze_pwm(raw_timeline, analyzer):
     # Duty cycle (high-fps).
     results["pwm_duty_cycle_pct"] = f"{avg_duty:.0f}%"
 
-    if avg_duty < 80:
+    # Prefer baseline-based reduction over duty-cycle heuristic when
+    # we have a baseline — duty cycle via threshold is noisy, whereas
+    # mean brightness vs. the Phase 1/2 ON distribution is not.
+    if reduction_source == "baseline":
+        ref_label = "Phase 1/2 baseline"
+        if reduction >= 25.0:
+            results["reduced_brightness"] = (
+                f"PASS ({brightness_ratio*100:.0f}% of {ref_label}, "
+                f"{reduction:.0f}% reduction; {reduction_detail})"
+            )
+        elif reduction >= 10.0:
+            results["reduced_brightness"] = (
+                f"PARTIAL ({brightness_ratio*100:.0f}% of {ref_label}, "
+                f"only {reduction:.0f}% reduction; {reduction_detail})"
+            )
+        else:
+            results["reduced_brightness"] = (
+                f"FAIL ({brightness_ratio*100:.0f}% of {ref_label}; "
+                f"no clear dimming; {reduction_detail})"
+            )
+    elif avg_duty < 80:
         results["reduced_brightness"] = (
             f"PASS (avg duty={avg_duty:.0f}%, "
             f"brightness_reduction={reduction:.0f}%)"
@@ -394,7 +465,7 @@ def _analyze_pwm(raw_timeline, analyzer):
     return results
 
 
-def score_phase3(timeline, analyzer):
+def score_phase3(timeline, analyzer, baseline=None):
     """
     Score Phase 3 video: Lab 1 clock behavior + PWM analysis.
 
@@ -403,6 +474,12 @@ def score_phase3(timeline, analyzer):
                   Must include raw brightness fields (outer_brightness,
                   inner_brightness) for PWM analysis.
         analyzer: The VideoAnalyzer instance.
+        baseline: Optional per-ring brightness baseline dict from an
+                  earlier phase's score results (the
+                  ``_brightness_baseline`` field set by lab1_score).
+                  Enables a calibration-invariant reduced_brightness
+                  check that compares Phase 3 ON-LED brightness to
+                  Phase 1/2 full-on brightness.
 
     Returns:
         (results, changes, initial_outer, initial_inner)
@@ -413,7 +490,7 @@ def score_phase3(timeline, analyzer):
     results, changes, initial_outer, initial_inner = lab1_score(timeline)
 
     # Then add PWM-specific analysis, which uses the raw brightness.
-    pwm_results = _analyze_pwm(timeline, analyzer)
+    pwm_results = _analyze_pwm(timeline, analyzer, baseline=baseline)
     results.update(pwm_results)
 
     return results, changes, initial_outer, initial_inner
