@@ -345,9 +345,15 @@ def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
     fr = str(framerate)
 
     # Resolve input format / video size from env-var fallbacks.  An
-    # explicit empty string disables the option entirely.
+    # explicit empty string disables the option entirely.  Defaults
+    # are platform-specific: Linux v4l2 needs MJPEG to escape the
+    # 5fps YUYV/USB-bandwidth trap, but macOS avfoundation doesn't
+    # accept "mjpeg" as a -pixel_format and is happiest with no
+    # explicit format hint at all.
+    default_input_format = "mjpeg" if system == "Linux" else ""
     if input_format is None:
-        input_format = os.environ.get("DALI_FFMPEG_INPUT_FORMAT", "mjpeg")
+        input_format = os.environ.get(
+            "DALI_FFMPEG_INPUT_FORMAT", default_input_format)
     if video_size is None:
         video_size = os.environ.get("DALI_FFMPEG_VIDEO_SIZE", "")
 
