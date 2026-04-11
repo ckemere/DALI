@@ -210,6 +210,37 @@ def export_rubric(path):
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
+# Mapping from phase name to the LLM rubric item whose response carries
+# that phase's extracted power measurement.
+_PHASE_POWER_ITEM = {
+    "phase1": "phase1_baseline_documented",
+    "phase2": "phase2_sleep_power_documented",
+    "phase3": "phase3_pwm_power_documented",
+}
+
+
+def _extract_power(llm_data, phase):
+    """Return (measured_power_uA, measurement_method) for a phase.
+
+    Looks up the LLM entry for that phase's "*_documented" rubric item
+    and returns whatever Gemini extracted.  Missing or non-numeric
+    values come back as (None, None) so old cached llm_results.json
+    files that predate Option A keep working.
+    """
+    item_id = _PHASE_POWER_ITEM.get(phase)
+    entry = (llm_data or {}).get(item_id, {})
+    if not isinstance(entry, dict):
+        return None, None
+    raw = entry.get("measured_power_uA")
+    method = entry.get("measurement_method")
+    if raw is None:
+        return None, method
+    try:
+        return float(raw), method
+    except (TypeError, ValueError):
+        return None, method
+
+
 def score_student(student, video_data, llm_data):
     """Compute points for one student.
 
@@ -220,7 +251,8 @@ def score_student(student, video_data, llm_data):
                     or None.
 
     Returns:
-        dict with keys: student, per-item points, subtotals, grand_total.
+        dict with keys: student, per-item points, subtotals, grand_total,
+        and phase{1,2,3}_power_uA / phase{1,2,3}_power_method diagnostics.
     """
     row = {"student": student}
     video_data = video_data or {}
@@ -253,6 +285,13 @@ def score_student(student, video_data, llm_data):
         llm_total += earned
     row["llm_total"] = llm_total
 
+    # Extracted power figures (not graded; just diagnostics pulled from
+    # the same LLM response).
+    for phase in ("phase1", "phase2", "phase3"):
+        power_uA, method = _extract_power(llm_data, phase)
+        row[f"{phase}_power_uA"] = power_uA
+        row[f"{phase}_power_method"] = method
+
     row["grand_total"] = vid_total + llm_total
     return row
 
@@ -284,6 +323,12 @@ def generate_grades_csv(students, video_results, llm_results, csv_path):
         p = LLM_RUBRIC_POINTS.get(item_id, 1)
         fieldnames.append(f"code: {desc} (max {p})")
     fieldnames.append(f"llm_total (max {llm_max})")
+
+    # Extracted-power diagnostic columns (not graded).
+    for phase in ("phase1", "phase2", "phase3"):
+        fieldnames.append(f"{phase}_power_uA")
+        fieldnames.append(f"{phase}_power_method")
+
     fieldnames.append(f"grand_total (max {grand_max})")
 
     rows = []
@@ -310,6 +355,12 @@ def generate_grades_csv(students, video_results, llm_results, csv_path):
             p = LLM_RUBRIC_POINTS.get(item_id, 1)
             csv_row[f"code: {desc} (max {p})"] = scored[f"llm_{item_id}"]
         csv_row[f"llm_total (max {llm_max})"] = scored["llm_total"]
+
+        for phase in ("phase1", "phase2", "phase3"):
+            csv_row[f"{phase}_power_uA"] = scored.get(f"{phase}_power_uA")
+            csv_row[f"{phase}_power_method"] = (
+                scored.get(f"{phase}_power_method"))
+
         csv_row[f"grand_total (max {grand_max})"] = scored["grand_total"]
         rows.append(csv_row)
 
@@ -389,6 +440,21 @@ def generate_report(student, video_data, llm_data, report_path):
     lines.append(f"{'-' * 60}")
     lines.append(f"{'CODE REVIEW SUBTOTAL':<45} {llm_total:>4}  {llm_max:>4}")
     grand_total += llm_total
+
+    # -- Extracted power figures --
+    power_lines = []
+    for phase in ("phase1", "phase2", "phase3"):
+        power_uA, method = _extract_power(llm_data, phase)
+        if power_uA is not None:
+            m = f" ({method})" if method else ""
+            power_lines.append(
+                f"  {phase}: {power_uA:>8.1f} µA{m}")
+        else:
+            power_lines.append(f"  {phase}: not reported")
+    if any("µA" in pl for pl in power_lines):
+        lines.append(f"\nEXTRACTED POWER FIGURES (from writeup)")
+        lines.append(f"{'-' * 60}")
+        lines.extend(power_lines)
 
     # -- Grand total --
     vid_max = sum(

@@ -125,11 +125,26 @@ Expected code files per phase (5 files each):
 
 _RUBRIC_PROMPT = """\
 Evaluate the following student submission against EVERY rubric item below.
-For EACH item, return a JSON object with three fields:
+For EACH item, return a JSON object with these fields:
   "verdict": one of "PASS", "FAIL", or "UNCLEAR"
   "reason":  one-sentence justification
   "evidence": the most relevant quoted line(s) of code or document text
               (empty string if not applicable)
+  "measured_power_uA": number or null — ONLY for the three
+              "..._power_documented" / "..._baseline_documented" items
+              (phase1_baseline_documented, phase2_sleep_power_documented,
+              phase3_pwm_power_documented).  If the writeup reports a
+              specific current measurement for that phase, return it as
+              a number in microamps (µA).  Convert from mA if needed
+              (e.g. "1.2 mA" -> 1200).  Use the EnergyTrace measurement
+              if one is given; otherwise use the student's own estimate.
+              Return null if no numeric figure was provided, or for any
+              rubric item that is not about power documentation.
+  "measurement_method": one of "measured", "estimated", or null —
+              same three items only.  "measured" if the number came
+              from EnergyTrace or a multimeter reading; "estimated" if
+              it came from a datasheet-based calculation; null
+              otherwise.
 
 Return your answer as a JSON object whose keys are the rubric-item IDs
 listed below.  Output ONLY valid JSON — no markdown fences, no commentary.
