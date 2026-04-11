@@ -310,64 +310,35 @@ def score(timeline):
         results["full_clock_cycle"] = f"FAIL ({'; '.join(parts)})"
 
     # ── Hour Increment at Wrap ────────────────────────────────────
-    # The hour hand (outer) should advance once each time the second
-    # hand (inner) completes a full 12-tick cycle, driven by the same
-    # firmware interrupt.  We verify this in a *calibration-invariant*
-    # way — comparing timing, not LED indices — because the calibration
-    # click order determines where "index 0" falls on the physical
-    # ring, and an off-by-one calibration should not silently break
-    # this rubric item.
-    #
-    # Two conditions must hold for a working clock:
-    #   1. Rate:      #inner_transitions ≈ 12 × #outer_transitions
-    #                 (the outer advances once every 12 inner ticks)
-    #   2. Alignment: every outer transition is temporally aligned
-    #                 with an inner transition (same IRQ → same frame
-    #                 at any reasonable frame rate).
-    #
-    # Direction of the outer hand is already graded separately by
-    # `outer_clockwise_sequence`, so this check does NOT also require
-    # a +1 index step.
-    n_inner = max(len(inner_seq) - 1, 0)
-    n_outer = max(len(outer_seq) - 1, 0)
+    # The hour hand (outer) should advance by one position each time
+    # the second hand (inner) wraps from LED 11 -> LED 0.
+    # We look for inner wrap events and check whether the outer ring
+    # changes within a small time window around each wrap.
+    inner_wrap_times = []
+    for i in range(len(inner_seq) - 1):
+        if inner_seq[i][1] == 11 and inner_seq[i + 1][1] == 0:
+            inner_wrap_times.append(inner_seq[i + 1][0])
 
-    if n_inner >= 12 and n_outer >= 1:
-        inner_tick_times = [t for t, _ in inner_seq[1:]]
-
-        # Condition 2: each outer tick aligned with an inner tick.
-        ALIGN_TOL = 0.6  # seconds — accommodates 5 fps sampling jitter
-        aligned = 0
-        for j in range(n_outer):
-            t_outer = outer_seq[j + 1][0]
-            if any(abs(t_outer - t_inner) <= ALIGN_TOL
-                   for t_inner in inner_tick_times):
-                aligned += 1
-        align_pct = aligned / n_outer * 100
-
-        # Condition 1: rate ≈ 12:1.  Allow some slack to tolerate the
-        # video starting mid-cycle or ending mid-cycle.
-        ratio = n_inner / n_outer
-        rate_ok = 10.0 <= ratio <= 14.0
-
-        if rate_ok and align_pct >= 80:
-            results["hour_increment_at_wrap"] = (
-                f"PASS ({aligned}/{n_outer} outer ticks aligned with "
-                f"inner, ratio={ratio:.1f}:1)"
-            )
-        elif align_pct >= 80 or rate_ok:
-            results["hour_increment_at_wrap"] = (
-                f"PARTIAL ({aligned}/{n_outer} aligned, ratio={ratio:.1f}:1)"
-            )
-        else:
-            results["hour_increment_at_wrap"] = (
-                f"FAIL ({aligned}/{n_outer} aligned, ratio={ratio:.1f}:1)"
-            )
-    elif n_inner < 12:
+    if inner_wrap_times and len(outer_seq) >= 2:
+        hits = 0
+        for wrap_t in inner_wrap_times:
+            # Find outer ring transitions within ±2 seconds of the wrap
+            for j in range(len(outer_seq) - 1):
+                t_outer = outer_seq[j + 1][0]
+                if abs(t_outer - wrap_t) <= 2.0:
+                    # Check it was a +1 step
+                    if outer_seq[j + 1][1] == (outer_seq[j][1] + 1) % 12:
+                        hits += 1
+                        break
         results["hour_increment_at_wrap"] = (
-            "NOT_OBSERVED (not enough inner ticks observed)")
+            f"PASS ({hits}/{len(inner_wrap_times)} wraps)"
+            if hits == len(inner_wrap_times)
+            else f"FAIL ({hits}/{len(inner_wrap_times)} wraps triggered hour advance)"
+        )
+    elif not inner_wrap_times:
+        results["hour_increment_at_wrap"] = "NOT_OBSERVED (no inner wrap detected)"
     else:
-        results["hour_increment_at_wrap"] = (
-            "NOT_OBSERVED (outer ring did not advance)")
+        results["hour_increment_at_wrap"] = "NOT_OBSERVED (outer ring insufficient data)"
 
     # ── Change log (useful for manual timing review) ──────────────
     all_changes = []
