@@ -218,6 +218,25 @@ _PHASE_POWER_ITEM = {
     "phase3": "phase3_pwm_power_documented",
 }
 
+# Plausibility threshold for the extracted power figures.  An MSPM0G3507
+# LaunchPad driving the LED clock should draw well under 10 mA even in
+# the Phase 1 busy-wait baseline; measurements > 10 mA almost always
+# mean the student left the analog-power (3V3 ANA / J101) jumper in
+# place, so the EnergyTrace reading also includes the XDS debug probe
+# and on-board analog rail.  Flagged as a note, not a point deduction.
+POWER_PLAUSIBILITY_THRESHOLD_uA = 10000.0
+
+
+def _power_plausibility_flag(power_uA):
+    """Return "ok", "high", or None for a single extracted reading."""
+    if power_uA is None:
+        return None
+    try:
+        return "high" if float(power_uA) > POWER_PLAUSIBILITY_THRESHOLD_uA \
+            else "ok"
+    except (TypeError, ValueError):
+        return None
+
 
 def _extract_power(llm_data, phase):
     """Return (measured_power_uA, measurement_method) for a phase.
@@ -286,11 +305,20 @@ def score_student(student, video_data, llm_data):
     row["llm_total"] = llm_total
 
     # Extracted power figures (not graded; just diagnostics pulled from
-    # the same LLM response).
+    # the same LLM response).  We also compute a plausibility flag per
+    # phase and an aggregate jumper-warning: any reading >10 mA almost
+    # certainly means the LaunchPad analog-power jumper was left in
+    # place, so the measurement is an over-estimate.
+    jumper_warning = False
     for phase in ("phase1", "phase2", "phase3"):
         power_uA, method = _extract_power(llm_data, phase)
+        flag = _power_plausibility_flag(power_uA)
         row[f"{phase}_power_uA"] = power_uA
         row[f"{phase}_power_method"] = method
+        row[f"{phase}_power_flag"] = flag
+        if flag == "high":
+            jumper_warning = True
+    row["power_jumper_warning"] = jumper_warning
 
     row["grand_total"] = vid_total + llm_total
     return row
@@ -328,6 +356,8 @@ def generate_grades_csv(students, video_results, llm_results, csv_path):
     for phase in ("phase1", "phase2", "phase3"):
         fieldnames.append(f"{phase}_power_uA")
         fieldnames.append(f"{phase}_power_method")
+        fieldnames.append(f"{phase}_power_flag")
+    fieldnames.append("power_jumper_warning")
 
     fieldnames.append(f"grand_total (max {grand_max})")
 
@@ -360,6 +390,10 @@ def generate_grades_csv(students, video_results, llm_results, csv_path):
             csv_row[f"{phase}_power_uA"] = scored.get(f"{phase}_power_uA")
             csv_row[f"{phase}_power_method"] = (
                 scored.get(f"{phase}_power_method"))
+            csv_row[f"{phase}_power_flag"] = (
+                scored.get(f"{phase}_power_flag"))
+        csv_row["power_jumper_warning"] = scored.get(
+            "power_jumper_warning", False)
 
         csv_row[f"grand_total (max {grand_max})"] = scored["grand_total"]
         rows.append(csv_row)
@@ -443,18 +477,36 @@ def generate_report(student, video_data, llm_data, report_path):
 
     # -- Extracted power figures --
     power_lines = []
+    any_high = False
     for phase in ("phase1", "phase2", "phase3"):
         power_uA, method = _extract_power(llm_data, phase)
         if power_uA is not None:
             m = f" ({method})" if method else ""
+            flag = _power_plausibility_flag(power_uA)
+            tag = "  [!! >10 mA]" if flag == "high" else ""
+            if flag == "high":
+                any_high = True
             power_lines.append(
-                f"  {phase}: {power_uA:>8.1f} µA{m}")
+                f"  {phase}: {power_uA:>8.1f} µA{m}{tag}")
         else:
             power_lines.append(f"  {phase}: not reported")
     if any("µA" in pl for pl in power_lines):
         lines.append(f"\nEXTRACTED POWER FIGURES (from writeup)")
         lines.append(f"{'-' * 60}")
         lines.extend(power_lines)
+        if any_high:
+            lines.append("")
+            lines.append(
+                "  WARNING: at least one reading exceeds "
+                f"{POWER_PLAUSIBILITY_THRESHOLD_uA / 1000:.0f} mA.")
+            lines.append(
+                "  This almost always means the LaunchPad analog-power")
+            lines.append(
+                "  jumper (3V3 ANA / J101) was left in place, so the")
+            lines.append(
+                "  EnergyTrace reading also includes the XDS debug probe")
+            lines.append(
+                "  supply and the measured figures are over-estimates.")
 
     # -- Grand total --
     vid_max = sum(
