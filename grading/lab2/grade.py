@@ -345,7 +345,7 @@ def capture_videos(phase_dirs, ccxml_path, video_dir,
 # =====================================================================
 
 def analyze_videos(video_dir, calibration_path, results_json,
-                   threshold_override=None):
+                   threshold_override=None, phase3_calibration_path=None):
     """
     Batch-analyze pre-recorded videos for all three phases.
 
@@ -354,14 +354,28 @@ def analyze_videos(video_dir, calibration_path, results_json,
 
     Phase 1 and 2 use standard Lab 1 scoring.
     Phase 3 uses high-FPS PWM analysis.
+
+    ``phase3_calibration_path`` (optional) lets you use a different
+    calibration file for Phase 3 videos — useful because PWM'd LEDs
+    are visibly dimmer and the Phase 1/2 thresholds won't detect them
+    reliably.  When unset, Phase 3 falls back to ``calibration_path``.
     """
     analyzer = VideoAnalyzer(calibration_path)
     if threshold_override is not None:
         analyzer.outer_threshold = threshold_override
         analyzer.inner_threshold = threshold_override
-    print(f"Calibration: {calibration_path}")
+    print(f"Calibration (phase1/2): {calibration_path}")
     print(f"Thresholds: outer={analyzer.outer_threshold}  "
           f"inner={analyzer.inner_threshold}")
+
+    if phase3_calibration_path:
+        phase3_analyzer = VideoAnalyzer(phase3_calibration_path)
+        print(f"Calibration (phase3):   {phase3_calibration_path}")
+        print(f"  thresholds: outer={phase3_analyzer.outer_threshold}  "
+              f"inner={phase3_analyzer.inner_threshold}")
+    else:
+        phase3_analyzer = analyzer
+        print("Calibration (phase3):   (using phase1/2 calibration)")
 
     all_results = {}  # student -> {phase1: scores, phase2: scores, ...}
 
@@ -380,6 +394,8 @@ def analyze_videos(video_dir, calibration_path, results_json,
             continue
 
         print(f"\n-- {phase} ({len(video_files)} videos) --")
+        # Phase 3 uses its own analyzer if one was provided.
+        active_analyzer = phase3_analyzer if phase == "phase3" else analyzer
 
         for vi, vname in enumerate(video_files, 1):
             student = os.path.splitext(vname)[0]
@@ -391,9 +407,10 @@ def analyze_videos(video_dir, calibration_path, results_json,
                 all_results[student] = {}
 
             try:
-                timeline = analyzer.extract_timeline(video_path)
+                timeline = active_analyzer.extract_timeline(video_path)
                 if phase == "phase3":
-                    scores, changes, _, _ = score_phase3(timeline, analyzer)
+                    scores, changes, _, _ = score_phase3(
+                        timeline, active_analyzer)
                     print(f"  PWM={scores.get('pwm_detected', '?')}  "
                           f"flicker={scores.get('no_visible_flicker', '?')}")
                 elif phase == "phase1":
@@ -627,12 +644,16 @@ def grade_batch(phase_dirs, video_dir, calibration_path,
                 video_output=None, llm_output=None,
                 api_key=None, model=DEFAULT_MODEL,
                 threshold_override=None, verbose=False, bulk_runs=0,
-                skip_video=False, skip_llm=False):
+                skip_video=False, skip_llm=False,
+                phase3_calibration_path=None):
     """
     Combined batch: video analysis and/or LLM code review.
 
     This is the primary grading entry point when you already have
     recorded videos.
+
+    ``phase3_calibration_path`` (optional): separate calibration for
+    Phase 3 videos.  Falls back to ``calibration_path`` when unset.
     """
     t_start = time.time()
 
@@ -646,6 +667,14 @@ def grade_batch(phase_dirs, video_dir, calibration_path,
         if threshold_override is not None:
             analyzer.outer_threshold = threshold_override
             analyzer.inner_threshold = threshold_override
+        print(f"  calibration (phase1/2): {calibration_path}")
+
+        if phase3_calibration_path:
+            phase3_analyzer = VideoAnalyzer(phase3_calibration_path)
+            print(f"  calibration (phase3):   {phase3_calibration_path}")
+        else:
+            phase3_analyzer = analyzer
+            print("  calibration (phase3):   (using phase1/2 calibration)")
 
         for phase in ("phase1", "phase2", "phase3"):
             phase_video_dir = os.path.join(video_dir, phase)
@@ -657,6 +686,8 @@ def grade_batch(phase_dirs, video_dir, calibration_path,
                 if os.path.splitext(f)[1].lower() in _VIDEO_EXTS
             )
             print(f"\n  {phase}: {len(video_files)} videos")
+            active_analyzer = (
+                phase3_analyzer if phase == "phase3" else analyzer)
 
             for vi, vname in enumerate(video_files, 1):
                 student = os.path.splitext(vname)[0]
@@ -668,10 +699,10 @@ def grade_batch(phase_dirs, video_dir, calibration_path,
                     video_results[student] = {}
 
                 try:
-                    timeline = analyzer.extract_timeline(video_path)
+                    timeline = active_analyzer.extract_timeline(video_path)
                     if phase == "phase3":
                         scores, changes, _, _ = score_phase3(
-                            timeline, analyzer)
+                            timeline, active_analyzer)
                     else:
                         scores, changes, _, _ = (
                             score_phase1(timeline) if phase == "phase1"
@@ -795,10 +826,22 @@ def main():
     # Video analysis.
     parser.add_argument(
         "--calibration",
-        help="Path to calibration JSON (enables video analysis)")
+        help="Path to calibration JSON (enables video analysis). "
+             "Used for Phase 1 and Phase 2, and as a fallback for "
+             "Phase 3 if --phase3-calibration is not given.")
+    parser.add_argument(
+        "--phase3-calibration",
+        help="Path to a separate calibration JSON for Phase 3 videos. "
+             "PWM'd LEDs are visibly dimmer than full-on, so the "
+             "Phase 1/2 thresholds usually don't detect them; "
+             "re-run the calibration GUI against a Phase 3 video "
+             "(e.g. python -m grading.calibrate --video phase3.mp4 "
+             "--load calibration.json --output phase3_calibration.json) "
+             "and pass the result here.")
     parser.add_argument(
         "--threshold", type=int, default=None,
-        help="Override brightness threshold from calibration")
+        help="Override brightness threshold from calibration "
+             "(applies to the phase1/2 analyzer only)")
 
     # LLM code review.
     parser.add_argument(
@@ -889,6 +932,7 @@ def main():
             calibration_path=args.calibration,
             results_json=args.video_output,
             threshold_override=args.threshold,
+            phase3_calibration_path=args.phase3_calibration,
         )
         sys.exit(0)
 
@@ -933,6 +977,7 @@ def main():
             bulk_runs=args.bulk,
             skip_video=args.skip_video,
             skip_llm=args.skip_llm,
+            phase3_calibration_path=args.phase3_calibration,
         )
         sys.exit(0)
 
