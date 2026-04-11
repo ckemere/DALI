@@ -46,9 +46,15 @@ DEFAULT_SAMPLE_RADIUS = 15
 # Each group: (key, display_label, count)
 LED_GROUPS = [
     ("debug_led", "Debug/Programming LED", 1),
-    ("outer_ring", "Outer Ring (Hours)", 12),
-    ("inner_ring", "Inner Ring (Seconds)", 12),
+    ("outer_ring", "Outer Ring (Hours) - CLICK 12 O'CLOCK FIRST", 12),
+    ("inner_ring", "Inner Ring (Seconds) - CLICK 12 O'CLOCK FIRST", 12),
 ]
+
+# Groups whose first-placed point must be 12 o'clock for the scoring
+# logic to line up (outer/inner ring wrap detection assumes index 0 is
+# at the 12 o'clock position).  We highlight LED 1 of these groups with
+# a crosshair so the grader can always see where they started.
+RING_KEYS = ("outer_ring", "inner_ring")
 
 
 def flash_binary(binary_path, ccxml_path, dslite_path):
@@ -302,9 +308,29 @@ class CalibrationGUI:
                 cv2.circle(display, (pos["x"], pos["y"]),
                            self.sample_radius, draw_color, thickness)
 
-                label_text = str(i + 1)
+                # Mark LED 1 of each ring (the 12 o'clock reference)
+                # with a small crosshair so the grader can always tell
+                # which click was first — scoring assumes index 0 is
+                # at 12 o'clock.
+                if key in RING_KEYS and i == 0:
+                    r = self.sample_radius + 4
+                    cv2.line(display,
+                             (pos["x"] - r, pos["y"]),
+                             (pos["x"] + r, pos["y"]),
+                             draw_color, 1)
+                    cv2.line(display,
+                             (pos["x"], pos["y"] - r),
+                             (pos["x"], pos["y"] + r),
+                             draw_color, 1)
+                    cv2.putText(display, "12",
+                                (pos["x"] + r + 2, pos["y"] - r - 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                                draw_color, 1)
+
                 if self.show_brightness:
                     label_text = f"{int(bri)}"
+                else:
+                    label_text = str(i + 1)
                 cv2.putText(display, label_text,
                             (pos["x"] - 8, pos["y"] + 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, draw_color, 1)
@@ -334,10 +360,12 @@ class CalibrationGUI:
         cv2.putText(display, stats_text, (10, 55),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
+        label_mode = "brightness" if self.show_brightness else "LED id"
         cv2.putText(
             display,
-            f"[t]hreshold [d]cycle-thr [+/-]adj [b]ri-stats [r]eset-stats  "
-            f"drag=move  right-click=del  [u]ndo [f]reeze [s]ave [q]uit",
+            f"[i]label={label_mode}  [t]hreshold [d]cycle-thr [+/-]adj "
+            f"[b]ri-stats [r]eset-stats  drag=move  right-click=del  "
+            f"[u]ndo [f]reeze [s]ave [q]uit",
             (10, display.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1,
         )
@@ -356,9 +384,14 @@ class CalibrationGUI:
         cv2.setMouseCallback(win, self._on_mouse)
 
         _, label, _ = self._group()
+        print("*** IMPORTANT: for each ring, CLICK THE 12 O'CLOCK LED FIRST. ***")
+        print("    The grading script treats the first click as index 0 and")
+        print("    assumes it is at 12 o'clock; starting anywhere else will")
+        print("    cause hour/wrap rubric items to fail silently.\n")
         print(f"Mark: {label}")
         print("Mouse: left-click=place, drag=move, right-click=delete")
-        print("Keys:  u=undo, t=threshold view, d=cycle threshold (outer/inner/debug),")
+        print("Keys:  u=undo, i=toggle label (brightness/LED id),")
+        print("       t=threshold view, d=cycle threshold (outer/inner/debug),")
         print("       +/-=adjust selected threshold, b=brightness stats, r=reset stats,")
         print("       f=freeze, s=save, q=quit\n")
 
@@ -394,6 +427,10 @@ class CalibrationGUI:
                     if self.positions[gkey]:
                         p = self.positions[gkey].pop()
                         print(f"  Back to previous group; undid ({p['x']}, {p['y']})")
+            elif key == ord("i"):
+                self.show_brightness = not self.show_brightness
+                mode = "brightness" if self.show_brightness else "LED id"
+                print(f"  Label mode: {mode}")
             elif key == ord("t"):
                 self.show_threshold = not self.show_threshold
             elif key == ord("d"):
