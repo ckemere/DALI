@@ -20,6 +20,14 @@
  *   D13 -> onboard LED + external LED (sync marker in camera frame)
  *   GND -> student GND                (common ground)
  *
+ * Note: D13 flashes briefly whenever the host (re)opens the serial
+ * port, because USB DTR triggers the Arduino auto-reset and the
+ * bootloader blinks SCK (= D13) for ~1 second before handing control
+ * to the sketch. Open the helper serial port ONCE at the start of a
+ * grading run (before ffmpeg starts recording) and keep it open for
+ * the whole run; the one-time reset flash then happens outside any
+ * recording window and is harmless.
+ *
  * Protocol (one character in, one lowercase ACK line out):
  *   G    glitch press        2 ms pin-low,    LED held >= 250 ms   -> "g"
  *   S    short press        250 ms pin-low,  LED matches           -> "s"
