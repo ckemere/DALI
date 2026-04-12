@@ -57,6 +57,7 @@ from grading.canvas import (
     upload_grade,
     resolve_user_id,
 )
+from assess.build import student_name_from_zip
 
 
 _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv"}
@@ -66,8 +67,13 @@ _PHASES = ("phase1", "phase2", "phase3")
 def _find_phase_video(video_dir, phase, student):
     """Find a student's video for a single phase.
 
-    Looks under ``<video_dir>/<phase>/<student>.<ext>`` for any of the
-    known video extensions.  Returns the path or None.
+    Looks under ``<video_dir>/<phase>/`` for a video file whose stem
+    matches ``student`` — either exactly, or after running the stem
+    through :func:`assess.build.student_name_from_zip`.  The latter
+    path lets us match Canvas-style long filenames such as
+    ``addepallimilan_78839_7441683_Lab_2_-_Phase_1_ma200.mp4`` that
+    earlier pipeline stages may have left in place.  Returns the path
+    or None.
     """
     if not video_dir:
         return None
@@ -76,7 +82,9 @@ def _find_phase_video(video_dir, phase, student):
         return None
     for f in os.listdir(phase_dir):
         name, ext = os.path.splitext(f)
-        if ext.lower() in _VIDEO_EXTS and name == student:
+        if ext.lower() not in _VIDEO_EXTS:
+            continue
+        if name == student or student_name_from_zip(name) == student:
             return os.path.join(phase_dir, f)
     return None
 
