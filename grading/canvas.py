@@ -19,6 +19,7 @@ Environment variables (or pass explicitly):
 import argparse
 import csv
 import os
+import re
 import sys
 
 try:
@@ -56,6 +57,12 @@ def fetch_student_map(session, base_url, course_id):
       - sortable_name (lowercase): "last, first"
       - login_id (lowercase): e.g. "abc12"
       - "first_last" style (lowercase, spaces → underscores)
+      - "lastfirst" concatenated (lowercase, non-alpha stripped except
+        hyphens).  Matches the canonical student identifier that
+        ``assess.build.student_name_from_zip()`` extracts from Canvas
+        "Download Submissions" filenames like
+        ``addepallimilan_78839_7441683_Lab_2_-_Phase_1_ma200.zip`` →
+        ``addepallimilan``, which is what ends up in ``grades.csv``.
     """
     students = canvas_get(
         session, base_url,
@@ -73,7 +80,13 @@ def fetch_student_map(session, base_url, course_id):
         # Also try "first_last" style.
         parts = name.split(", ", 1)
         if len(parts) == 2:
-            mapping[f"{parts[1]}_{parts[0]}".replace(" ", "_")] = sid
+            last, first = parts
+            mapping[f"{first}_{last}".replace(" ", "_")] = sid
+            # Canvas submission-filename style: "<last><first>" with
+            # all non-alpha (except hyphens) stripped.
+            canvas_key = re.sub(r"[^a-z\-]", "", f"{last}{first}")
+            if canvas_key:
+                mapping[canvas_key] = sid
     return mapping
 
 
