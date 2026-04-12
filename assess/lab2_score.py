@@ -183,12 +183,12 @@ def _analyze_pwm(raw_timeline, analyzer, baseline=None):
         if outer_ever_on[led_idx]:
             series = outer_bri[:, led_idx]
             # Only include segments where the LED is active.
-            active_mask = series > low_outer
+            active_mask = series > outer_thr
             if np.sum(active_mask) > 10:
                 all_brightness_series.append(series[active_mask])
         if inner_ever_on[led_idx]:
             series = inner_bri[:, led_idx]
-            active_mask = series > low_inner
+            active_mask = series > inner_thr
             if np.sum(active_mask) > 10:
                 all_brightness_series.append(series[active_mask])
 
