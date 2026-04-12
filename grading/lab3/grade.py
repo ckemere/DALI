@@ -154,7 +154,7 @@ def _discover_submissions(
     out: Dict[str, str] = {}
     if not os.path.isdir(submissions_dir):
         raise FileNotFoundError(submissions_dir)
-    only_set = set(only or ())
+    only_set = {os.path.basename(o) for o in (only or ())}
     for f in sorted(os.listdir(submissions_dir)):
         if not f.endswith(".zip"):
             continue
