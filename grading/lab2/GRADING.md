@@ -65,6 +65,9 @@ submitted only with Phase 3.
 - DSLite (`DSLite` from CCS) on `PATH` or pointed at by `DSLITE_PATH`
 - `ffmpeg` and `ffplay` installed (Homebrew on macOS, apt on Linux)
 - A Gemini API key in `GEMINI_API_KEY` (for the LLM code review step only)
+- Canvas credentials in `CANVAS_API_TOKEN`, `CANVAS_BASE_URL`, and
+  `COURSE_ID` (for the Step 9 upload only — omit if you don't plan to
+  push grades back to Canvas)
 - A camera capable of at least 30 fps at 640×480.  A built-in laptop webcam
   is fine — the analyzer has a low-fps fallback for Phase 3 PWM detection.
 
@@ -444,21 +447,76 @@ This produces:
 ### Step 9 — Upload grades to Canvas
 
 Each phase has its own Canvas assignment, but the writeup-related
-rubric items only live in Phase 3.  A typical pattern is to post the
-full rubric report to Phase 3 with the grand total, and post each
-phase's compile/flash status to its own assignment as a smaller note:
+rubric items only live in Phase 3 and `score_results` produces a
+single per-student report combining all three phases.  The typical
+pattern is to post the grand total plus a feedback bundle containing
+the full report and all three phase videos to the **Phase 3**
+assignment:
+
+```bash
+python -m grading.lab2.canvas_upload \
+    --csv grades.csv \
+    --reports-dir reports/ \
+    --video-dir ./videos \
+    --course-id 12345 \
+    --assignment-id 510247
+```
+
+This will, for every student in `grades.csv`:
+
+1. Fetch the Canvas roster and resolve the student's user ID.
+2. Build a feedback ZIP containing:
+   - `<student>_report.txt` from `reports/`
+   - `<student>_phase1.mp4`, `<student>_phase2.mp4`,
+     `<student>_phase3.mp4` — whichever phase videos exist under
+     `./videos/phase{1,2,3}/<student>.mp4`.
+3. PUT the `grand_total` to Canvas as the assignment grade and attach
+   the feedback ZIP as a submission comment.
+
+The score column is auto-detected (first `grand_total*` column in the
+CSV), so there's no need to spell out the `(max N)` suffix.  Override
+with `--score-column "..."` if you want a different column.
+
+Students with missing phases are handled gracefully — the ZIP just
+excludes videos that aren't on disk.
+
+**Always dry-run first.**  This prints exactly what would be uploaded
+without touching Canvas:
+
+```bash
+python -m grading.lab2.canvas_upload \
+    --csv grades.csv \
+    --reports-dir reports/ \
+    --video-dir ./videos \
+    --assignment-id 510247 \
+    --dry-run
+```
+
+Required environment variables (or pass explicitly):
+
+| Variable            | Flag              | Example                       |
+| ------------------- | ----------------- | ----------------------------- |
+| `CANVAS_API_TOKEN`  | `--token`         | `7~abc...`                    |
+| `CANVAS_BASE_URL`   | `--url`           | `https://canvas.rice.edu`     |
+| `COURSE_ID`         | `--course-id`     | `12345`                       |
+
+If you'd rather upload **scores only** (no feedback bundle, no video)
+and already have a column of inline comment text in the CSV, use the
+generic uploader instead:
 
 ```bash
 python -m grading.canvas \
     --csv grades.csv \
     --assignment-id 510247 \
     --student-column student \
-    --score-column "grand_total (max N)" \
-    --comment-column rubric_text
+    --score-column "grand_total (max 45)" \
+    --comment-column comment_text
 ```
 
-Replace `N` with whatever max you computed in Step 8b, and the
-assignment id with whichever phase you're targeting.
+Note the generic uploader does **not** attach files — its
+`--comment-column` reads literal text out of a CSV column.  For Lab 2
+you almost always want `grading.lab2.canvas_upload` instead so the
+per-student report and videos end up in Canvas.
 
 ## Rubric Items
 
@@ -573,4 +631,6 @@ analysis, and reported as missing in the per-student rubric report.
 | `grading/lab2/grade.py`           | Main orchestrator (capture, analyze, review)|
 | `grading/lab2/code_review.py`     | Bulk review wrapper                         |
 | `grading/lab2/score_results.py`   | Combine results, apply rubric, gen reports  |
+| `grading/lab2/canvas_upload.py`   | Upload grades + feedback bundles to Canvas  |
+| `grading/lab2/rubric_total.py`    | Total rubric.yaml points by category        |
 | `grading/lab2/GRADING.md`         | This file                                   |
