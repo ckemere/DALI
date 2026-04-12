@@ -158,7 +158,7 @@ PHASE_VIDEO_DESCRIPTIONS = {
 def load_rubric(rubric_path):
     """Load rubric weights from YAML, updating the module-level dicts.
 
-    Returns (total_video_max, total_llm_max).
+    Returns (total_video_max, total_llm_max, total_power_sanity_max).
     """
     with open(rubric_path, "r") as f:
         data = yaml.safe_load(f)
@@ -179,12 +179,22 @@ def load_rubric(rubric_path):
             if "description" in entry:
                 LLM_RUBRIC_DESCRIPTIONS[item_id] = entry["description"]
 
+    for entry in data.get("power_sanity", []):
+        item_id = entry["id"]
+        if item_id in POWER_SANITY_POINTS:
+            POWER_SANITY_POINTS[item_id] = entry["points"]
+            if "description" in entry:
+                POWER_SANITY_DESCRIPTIONS[item_id] = entry["description"]
+            if "threshold_uA" in entry:
+                POWER_SANITY_THRESHOLDS[item_id] = float(entry["threshold_uA"])
+
     vid_max = sum(
         sum(PHASE_VIDEO_POINTS[p].get(k, 1) for k in items)
         for p, items in PHASE_VIDEO_ITEMS.items()
     )
     llm_max = sum(LLM_RUBRIC_POINTS.get(k, 1) for k in LLM_RUBRIC_ITEMS)
-    return vid_max, llm_max
+    power_max = sum(POWER_SANITY_POINTS.get(k, 0) for k in POWER_SANITY_ITEMS)
+    return vid_max, llm_max, power_max
 
 
 def export_rubric(path):
@@ -206,6 +216,16 @@ def export_rubric(path):
          "points": LLM_RUBRIC_POINTS.get(k, 1)}
         for k in LLM_RUBRIC_ITEMS
     ]
+
+    data["power_sanity"] = [
+        {"id": k,
+         "description": POWER_SANITY_DESCRIPTIONS.get(k, k),
+         "points": POWER_SANITY_POINTS.get(k, 0),
+         "threshold_uA": POWER_SANITY_THRESHOLDS.get(
+             k, DEFAULT_POWER_THRESHOLD_uA)}
+        for k in POWER_SANITY_ITEMS
+    ]
+
     with open(path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
@@ -218,46 +238,83 @@ _PHASE_POWER_ITEM = {
     "phase3": "phase3_pwm_power_documented",
 }
 
-# Plausibility threshold for the extracted power figures.  An MSPM0G3507
-# LaunchPad driving the LED clock should draw well under 10 mA even in
-# the Phase 1 busy-wait baseline; measurements > 10 mA almost always
-# mean the student left the analog-power (3V3 ANA / J101) jumper in
-# place, so the EnergyTrace reading also includes the XDS debug probe
-# and on-board analog rail.  Flagged as a note, not a point deduction.
-POWER_PLAUSIBILITY_THRESHOLD_uA = 10000.0
+# Default plausibility threshold.  An MSPM0G3507 LaunchPad driving the
+# LED clock should draw well under 10 mA even in the Phase 1 busy-wait
+# baseline; readings > 10 mA almost always mean the student left the
+# analog-power (3V3 ANA / J101) jumper in place, so the EnergyTrace
+# reading also includes the XDS debug probe and on-board analog rail.
+DEFAULT_POWER_THRESHOLD_uA = 10000.0
+
+# Computed "power_sanity" rubric category.  Structured the same way as
+# the video / LLM rubric dicts so load_rubric / export_rubric /
+# score_student / generate_grades_csv treat it uniformly.
+POWER_SANITY_ITEMS = ["power_plausible"]
+
+POWER_SANITY_POINTS = {
+    # Default of 2; instructor overrides in rubric.yaml if they want
+    # a different deduction (or 0 to treat it as diagnostic-only).
+    "power_plausible": 2,
+}
+
+POWER_SANITY_DESCRIPTIONS = {
+    "power_plausible": (
+        "All phases report plausible power (<10 mA; "
+        "analog-power jumper removed)"),
+}
+
+POWER_SANITY_THRESHOLDS = {
+    "power_plausible": DEFAULT_POWER_THRESHOLD_uA,
+}
 
 
-def _power_plausibility_flag(power_uA):
-    """Return "ok", "high", or None for a single extracted reading."""
-    if power_uA is None:
+def _coerce_float(v):
+    if v is None:
         return None
     try:
-        return "high" if float(power_uA) > POWER_PLAUSIBILITY_THRESHOLD_uA \
-            else "ok"
+        return float(v)
     except (TypeError, ValueError):
         return None
 
 
 def _extract_power(llm_data, phase):
-    """Return (measured_power_uA, measurement_method) for a phase.
+    """Return dict {min_uA, avg_uA, method} for a phase.
 
-    Looks up the LLM entry for that phase's "*_documented" rubric item
-    and returns whatever Gemini extracted.  Missing or non-numeric
-    values come back as (None, None) so old cached llm_results.json
-    files that predate Option A keep working.
+    Reads the new ``measured_min_power_uA`` / ``measured_avg_power_uA``
+    fields that Gemini started returning after the min/avg split, and
+    falls back to the old single ``measured_power_uA`` field (treated
+    as "avg") so cached llm_results.json files from earlier runs still
+    work.
     """
+    empty = {"min_uA": None, "avg_uA": None, "method": None}
     item_id = _PHASE_POWER_ITEM.get(phase)
     entry = (llm_data or {}).get(item_id, {})
     if not isinstance(entry, dict):
-        return None, None
-    raw = entry.get("measured_power_uA")
-    method = entry.get("measurement_method")
-    if raw is None:
-        return None, method
-    try:
-        return float(raw), method
-    except (TypeError, ValueError):
-        return None, method
+        return empty
+    min_uA = _coerce_float(entry.get("measured_min_power_uA"))
+    avg_uA = _coerce_float(entry.get("measured_avg_power_uA"))
+    if min_uA is None and avg_uA is None:
+        legacy = _coerce_float(entry.get("measured_power_uA"))
+        if legacy is not None:
+            avg_uA = legacy
+    return {
+        "min_uA": min_uA,
+        "avg_uA": avg_uA,
+        "method": entry.get("measurement_method"),
+    }
+
+
+def _phase_power_flag(power, threshold_uA):
+    """Return "ok", "high", or None for one phase's power dict.
+
+    A phase is "high" if EITHER the min or the avg reading exceeds
+    the threshold — the jumper-left-in artifact lifts both.  Returns
+    None (unknown) if no numeric readings were extracted.
+    """
+    vals = [v for v in (power.get("min_uA"), power.get("avg_uA"))
+            if v is not None]
+    if not vals:
+        return None
+    return "high" if max(vals) > threshold_uA else "ok"
 
 
 def score_student(student, video_data, llm_data):
@@ -271,7 +328,8 @@ def score_student(student, video_data, llm_data):
 
     Returns:
         dict with keys: student, per-item points, subtotals, grand_total,
-        and phase{1,2,3}_power_uA / phase{1,2,3}_power_method diagnostics.
+        per-phase min/avg power, per-phase power_flag, power_sanity
+        items, and power_sanity_total.
     """
     row = {"student": student}
     video_data = video_data or {}
@@ -304,23 +362,39 @@ def score_student(student, video_data, llm_data):
         llm_total += earned
     row["llm_total"] = llm_total
 
-    # Extracted power figures (not graded; just diagnostics pulled from
-    # the same LLM response).  We also compute a plausibility flag per
-    # phase and an aggregate jumper-warning: any reading >10 mA almost
-    # certainly means the LaunchPad analog-power jumper was left in
-    # place, so the measurement is an over-estimate.
-    jumper_warning = False
+    # Extracted power figures (diagnostics pulled from the LLM
+    # response).  Record min, avg, method, and an "ok" / "high"
+    # per-phase flag using the power_plausible threshold.
+    threshold = POWER_SANITY_THRESHOLDS.get(
+        "power_plausible", DEFAULT_POWER_THRESHOLD_uA)
+    any_high = False
     for phase in ("phase1", "phase2", "phase3"):
-        power_uA, method = _extract_power(llm_data, phase)
-        flag = _power_plausibility_flag(power_uA)
-        row[f"{phase}_power_uA"] = power_uA
-        row[f"{phase}_power_method"] = method
+        power = _extract_power(llm_data, phase)
+        flag = _phase_power_flag(power, threshold)
+        row[f"{phase}_min_power_uA"] = power["min_uA"]
+        row[f"{phase}_avg_power_uA"] = power["avg_uA"]
+        row[f"{phase}_power_method"] = power["method"]
         row[f"{phase}_power_flag"] = flag
         if flag == "high":
-            jumper_warning = True
-    row["power_jumper_warning"] = jumper_warning
+            any_high = True
 
-    row["grand_total"] = vid_total + llm_total
+    # Computed "power_sanity" rubric.  Student earns the full
+    # points if no phase exceeded the threshold; loses them if any
+    # did.  If no numeric readings were extracted at all (nothing
+    # flagged "high"), we give the student the points — we can't
+    # prove they left the jumper in without data.
+    power_total = 0
+    for item_id in POWER_SANITY_ITEMS:
+        max_pts = POWER_SANITY_POINTS.get(item_id, 0)
+        if item_id == "power_plausible":
+            earned = 0 if any_high else max_pts
+        else:
+            earned = max_pts
+        row[f"power_{item_id}"] = earned
+        power_total += earned
+    row["power_sanity_total"] = power_total
+
+    row["grand_total"] = vid_total + llm_total + power_total
     return row
 
 
@@ -331,7 +405,8 @@ def generate_grades_csv(students, video_results, llm_results, csv_path):
         for p, items in PHASE_VIDEO_ITEMS.items()
     )
     llm_max = sum(LLM_RUBRIC_POINTS.get(k, 1) for k in LLM_RUBRIC_ITEMS)
-    grand_max = vid_max + llm_max
+    power_max = sum(POWER_SANITY_POINTS.get(k, 0) for k in POWER_SANITY_ITEMS)
+    grand_max = vid_max + llm_max + power_max
 
     fieldnames = ["student"]
 
@@ -352,12 +427,19 @@ def generate_grades_csv(students, video_results, llm_results, csv_path):
         fieldnames.append(f"code: {desc} (max {p})")
     fieldnames.append(f"llm_total (max {llm_max})")
 
-    # Extracted-power diagnostic columns (not graded).
+    # Power-sanity rubric columns (computed, not LLM-graded).
+    for item_id in POWER_SANITY_ITEMS:
+        desc = POWER_SANITY_DESCRIPTIONS.get(item_id, item_id)
+        p = POWER_SANITY_POINTS.get(item_id, 0)
+        fieldnames.append(f"power: {desc} (max {p})")
+    fieldnames.append(f"power_sanity_total (max {power_max})")
+
+    # Extracted-power diagnostic columns (numeric, not graded).
     for phase in ("phase1", "phase2", "phase3"):
-        fieldnames.append(f"{phase}_power_uA")
+        fieldnames.append(f"{phase}_min_power_uA")
+        fieldnames.append(f"{phase}_avg_power_uA")
         fieldnames.append(f"{phase}_power_method")
         fieldnames.append(f"{phase}_power_flag")
-    fieldnames.append("power_jumper_warning")
 
     fieldnames.append(f"grand_total (max {grand_max})")
 
@@ -386,14 +468,23 @@ def generate_grades_csv(students, video_results, llm_results, csv_path):
             csv_row[f"code: {desc} (max {p})"] = scored[f"llm_{item_id}"]
         csv_row[f"llm_total (max {llm_max})"] = scored["llm_total"]
 
+        for item_id in POWER_SANITY_ITEMS:
+            desc = POWER_SANITY_DESCRIPTIONS.get(item_id, item_id)
+            p = POWER_SANITY_POINTS.get(item_id, 0)
+            csv_row[f"power: {desc} (max {p})"] = scored.get(
+                f"power_{item_id}", 0)
+        csv_row[f"power_sanity_total (max {power_max})"] = scored.get(
+            "power_sanity_total", 0)
+
         for phase in ("phase1", "phase2", "phase3"):
-            csv_row[f"{phase}_power_uA"] = scored.get(f"{phase}_power_uA")
+            csv_row[f"{phase}_min_power_uA"] = scored.get(
+                f"{phase}_min_power_uA")
+            csv_row[f"{phase}_avg_power_uA"] = scored.get(
+                f"{phase}_avg_power_uA")
             csv_row[f"{phase}_power_method"] = (
                 scored.get(f"{phase}_power_method"))
             csv_row[f"{phase}_power_flag"] = (
                 scored.get(f"{phase}_power_flag"))
-        csv_row["power_jumper_warning"] = scored.get(
-            "power_jumper_warning", False)
 
         csv_row[f"grand_total (max {grand_max})"] = scored["grand_total"]
         rows.append(csv_row)
@@ -475,30 +566,40 @@ def generate_report(student, video_data, llm_data, report_path):
     lines.append(f"{'CODE REVIEW SUBTOTAL':<45} {llm_total:>4}  {llm_max:>4}")
     grand_total += llm_total
 
-    # -- Extracted power figures --
+    # -- Extracted power figures + power_sanity rubric --
+    threshold = POWER_SANITY_THRESHOLDS.get(
+        "power_plausible", DEFAULT_POWER_THRESHOLD_uA)
     power_lines = []
     any_high = False
+    any_value = False
     for phase in ("phase1", "phase2", "phase3"):
-        power_uA, method = _extract_power(llm_data, phase)
-        if power_uA is not None:
-            m = f" ({method})" if method else ""
-            flag = _power_plausibility_flag(power_uA)
-            tag = "  [!! >10 mA]" if flag == "high" else ""
-            if flag == "high":
-                any_high = True
-            power_lines.append(
-                f"  {phase}: {power_uA:>8.1f} µA{m}{tag}")
-        else:
+        power = _extract_power(llm_data, phase)
+        min_uA = power["min_uA"]
+        avg_uA = power["avg_uA"]
+        method = power["method"]
+        if min_uA is None and avg_uA is None:
             power_lines.append(f"  {phase}: not reported")
-    if any("µA" in pl for pl in power_lines):
+            continue
+        any_value = True
+        flag = _phase_power_flag(power, threshold)
+        tag = f"  [!! > {threshold / 1000:.0f} mA]" if flag == "high" else ""
+        if flag == "high":
+            any_high = True
+        m = f" ({method})" if method else ""
+        min_s = f"{min_uA:>8.1f}" if min_uA is not None else "     n/a"
+        avg_s = f"{avg_uA:>8.1f}" if avg_uA is not None else "     n/a"
+        power_lines.append(
+            f"  {phase}:  min={min_s} µA   avg={avg_s} µA{m}{tag}")
+
+    if any_value:
         lines.append(f"\nEXTRACTED POWER FIGURES (from writeup)")
         lines.append(f"{'-' * 60}")
         lines.extend(power_lines)
         if any_high:
             lines.append("")
             lines.append(
-                "  WARNING: at least one reading exceeds "
-                f"{POWER_PLAUSIBILITY_THRESHOLD_uA / 1000:.0f} mA.")
+                f"  WARNING: at least one reading exceeds "
+                f"{threshold / 1000:.0f} mA.")
             lines.append(
                 "  This almost always means the LaunchPad analog-power")
             lines.append(
@@ -508,12 +609,36 @@ def generate_report(student, video_data, llm_data, report_path):
             lines.append(
                 "  supply and the measured figures are over-estimates.")
 
+    power_max = sum(POWER_SANITY_POINTS.get(k, 0) for k in POWER_SANITY_ITEMS)
+    if power_max > 0:
+        lines.append(f"\nPOWER SANITY RUBRIC")
+        lines.append(f"{'-' * 60}")
+        lines.append(f"{'Item':<45} {'Pts':>4}  {'Max':>4}  Result")
+        lines.append(f"{'-' * 60}")
+        power_total = 0
+        for item_id in POWER_SANITY_ITEMS:
+            desc = POWER_SANITY_DESCRIPTIONS.get(item_id, item_id)
+            max_pts = POWER_SANITY_POINTS.get(item_id, 0)
+            if item_id == "power_plausible":
+                result = "FAIL" if any_high else "PASS"
+            else:
+                result = "PASS"
+            earned = max_pts if result == "PASS" else 0
+            power_total += earned
+            lines.append(
+                f"{desc:<45} {earned:>4}  {max_pts:>4}  {result}")
+        lines.append(f"{'-' * 60}")
+        lines.append(
+            f"{'POWER SANITY SUBTOTAL':<45} "
+            f"{power_total:>4}  {power_max:>4}")
+        grand_total += power_total
+
     # -- Grand total --
     vid_max = sum(
         sum(PHASE_VIDEO_POINTS[p].get(k, 1) for k in items)
         for p, items in PHASE_VIDEO_ITEMS.items()
     )
-    total_max = vid_max + llm_max
+    total_max = vid_max + llm_max + power_max
     lines.append(f"\n{'=' * 60}")
     lines.append(f"{'TOTAL':<45} {grand_total:>4}  {total_max:>4}")
     lines.append(f"{'=' * 60}")
@@ -580,15 +705,18 @@ def main():
 
     # -- Load rubric weights --
     if args.rubric:
-        vid_max, llm_max = load_rubric(args.rubric)
+        vid_max, llm_max, power_max = load_rubric(args.rubric)
         print(f"Loaded rubric from {args.rubric} "
-              f"(video: {vid_max} pts, code: {llm_max} pts)")
+              f"(video: {vid_max} pts, code: {llm_max} pts, "
+              f"power: {power_max} pts)")
     else:
         vid_max = sum(
             sum(PHASE_VIDEO_POINTS[p].get(k, 1) for k in items)
             for p, items in PHASE_VIDEO_ITEMS.items()
         )
         llm_max = sum(LLM_RUBRIC_POINTS.get(k, 1) for k in LLM_RUBRIC_ITEMS)
+        power_max = sum(POWER_SANITY_POINTS.get(k, 0)
+                        for k in POWER_SANITY_ITEMS)
 
     # -- Load results --
     video_results = {}
@@ -619,11 +747,12 @@ def main():
         all_students, video_results, llm_results, args.grades_csv)
     print(f"\nGrades written to {args.grades_csv}")
 
-    totals = [r.get(f"grand_total (max {vid_max + llm_max})", 0)
+    grand_max = vid_max + llm_max + power_max
+    totals = [r.get(f"grand_total (max {grand_max})", 0)
               for r in rows]
     if totals:
         avg = sum(totals) / len(totals)
-        print(f"  Average: {avg:.1f}/{vid_max + llm_max}")
+        print(f"  Average: {avg:.1f}/{grand_max}")
 
     # -- Generate reports --
     if args.reports_dir:

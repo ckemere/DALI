@@ -130,21 +130,31 @@ For EACH item, return a JSON object with these fields:
   "reason":  one-sentence justification
   "evidence": the most relevant quoted line(s) of code or document text
               (empty string if not applicable)
-  "measured_power_uA": number or null — ONLY for the three
+  "measured_min_power_uA":  number or null — ONLY for the three
               "..._power_documented" / "..._baseline_documented" items
               (phase1_baseline_documented, phase2_sleep_power_documented,
-              phase3_pwm_power_documented).  If the writeup reports a
-              specific current measurement for that phase, return it as
-              a number in microamps (µA).  Convert from mA if needed
-              (e.g. "1.2 mA" -> 1200).  Use the EnergyTrace measurement
-              if one is given; otherwise use the student's own estimate.
-              Return null if no numeric figure was provided, or for any
-              rubric item that is not about power documentation.
+              phase3_pwm_power_documented).  The MINIMUM current reading
+              for that phase, in microamps (µA).  Code Composer Studio
+              / EnergyTrace screenshots typically show three numbers on
+              the live current trace — min, average, and max; this
+              field takes the "min" number.  Minimum current is the
+              better signal for sleep/PWM savings because it captures
+              the idle-between-ticks current rather than the
+              LED-active-on-top-of-idle current.  Convert mA→µA
+              (e.g. "0.42 mA" -> 420).  Return null if no minimum
+              figure was given, or for any rubric item that is not
+              about power documentation.
+  "measured_avg_power_uA":  number or null — same three items only.
+              The AVERAGE current reading for that phase, in microamps
+              (µA).  If the writeup only reports a single number
+              (estimate or single multimeter reading), put it in this
+              field and leave measured_min_power_uA null.  Convert
+              mA→µA as above.
   "measurement_method": one of "measured", "estimated", or null —
-              same three items only.  "measured" if the number came
-              from EnergyTrace or a multimeter reading; "estimated" if
-              it came from a datasheet-based calculation; null
-              otherwise.
+              same three items only.  "measured" if the numbers came
+              from EnergyTrace, CCS live current trace, or a multimeter
+              reading; "estimated" if they came from a datasheet-based
+              hand calculation; null otherwise.
 
 Return your answer as a JSON object whose keys are the rubric-item IDs
 listed below.  Output ONLY valid JSON — no markdown fences, no commentary.
