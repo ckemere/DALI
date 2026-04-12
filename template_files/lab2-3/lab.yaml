@@ -1,9 +1,9 @@
-display_name: "Lab 2 - Phase 2"
+display_name: "Lab 2 - Phase 3"
 canvas_assignment_id: "510247"
 instructions: |
-  Please upload your final code files only for the **second phase**
-  (using a timer interrupt rather than busy wait) portion of the assignment!
-  
+  Please upload your final code files only for the **third phase**
+  (PWM-modulated LED brightness) portion of the assignment!
+
   Make sure that your writeup describing the power consumption of the different
   phases is submitted here.
 

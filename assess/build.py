@@ -13,6 +13,7 @@ Used by both the DALI web app (compile queue) and grading workflows.
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import time
@@ -310,7 +311,8 @@ def flash_firmware(build_dir, dslite_path, ccxml_path, output_name):
 # ---------------------------------------------------------------------------
 
 def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
-                    settle_time=3):
+                    settle_time=3, framerate=30,
+                    input_format=None, video_size=None):
     """
     Start recording video in the background using ffmpeg.
     Auto-detects platform (Linux v4l2, macOS avfoundation).
@@ -318,15 +320,60 @@ def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
     Waits *settle_time* seconds after launching ffmpeg so the camera
     is actually capturing before the caller proceeds.
 
+    Args:
+        output_path: Path for the output video file.
+        duration:    Recording duration in seconds.
+        camera_device: Camera device index.
+        settle_time: Seconds to wait after launching ffmpeg.
+        framerate:   Capture frame rate (default 30; use higher for
+                     PWM flicker detection, e.g. 120 or 240).
+        input_format: v4l2/avfoundation pixel format hint (e.g.
+                     ``mjpeg``, ``yuyv422``).  Defaults to ``mjpeg`` on
+                     Linux because most USB webcams cannot sustain
+                     >5 fps in raw YUYV at HD resolution.  Override via
+                     the ``DALI_FFMPEG_INPUT_FORMAT`` environment
+                     variable; pass an empty string to disable.
+        video_size:  Capture resolution (e.g. ``1280x720``,
+                     ``640x480``).  Defaults to whatever the
+                     ``DALI_FFMPEG_VIDEO_SIZE`` environment variable
+                     is set to, otherwise lets ffmpeg pick.  Lower
+                     resolutions are usually required to hit very high
+                     frame rates (120+ fps for PWM detection).
+
     Returns a Popen process, or None on error.
     """
     system = platform.system()
+    fr = str(framerate)
+
+    # Resolve input format / video size from env-var fallbacks.  An
+    # explicit empty string disables the option entirely.  Defaults
+    # are platform-specific: Linux v4l2 needs MJPEG to escape the
+    # 5fps YUYV/USB-bandwidth trap, but macOS avfoundation doesn't
+    # accept "mjpeg" as a -pixel_format and is happiest with no
+    # explicit format hint at all.
+    default_input_format = "mjpeg" if system == "Linux" else ""
+    if input_format is None:
+        input_format = os.environ.get(
+            "DALI_FFMPEG_INPUT_FORMAT", default_input_format)
+    if video_size is None:
+        video_size = os.environ.get("DALI_FFMPEG_VIDEO_SIZE", "")
+
     if system == "Linux":
-        input_args = ["-f", "v4l2", "-framerate", "30",
-                      "-i", f"/dev/video{camera_device}"]
+        input_args = ["-f", "v4l2"]
+        if input_format:
+            input_args += ["-input_format", input_format]
+        if video_size:
+            input_args += ["-video_size", video_size]
+        input_args += ["-framerate", fr,
+                       "-i", f"/dev/video{camera_device}"]
     elif system == "Darwin":
-        input_args = ["-f", "avfoundation", "-framerate", "30",
-                      "-i", str(camera_device)]
+        input_args = ["-f", "avfoundation"]
+        if input_format:
+            input_args += ["-pixel_format", input_format]
+        if video_size:
+            input_args += ["-video_size", video_size]
+        input_args += ["-framerate", fr,
+                       "-i", str(camera_device)]
     else:
         print(f"  Warning: unsupported platform {system} for recording")
         return None
@@ -342,6 +389,9 @@ def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
         "-pix_fmt", "yuv420p",
         output_path,
     ]
+    # Print the exact ffmpeg invocation so the user can debug rate /
+    # format negotiation problems.
+    print(f"    ffmpeg: {' '.join(cmd)}")
     try:
         proc = subprocess.Popen(
             cmd,
@@ -351,6 +401,10 @@ def start_recording(output_path, duration=VIDEO_DURATION, camera_device=0,
         if settle_time > 0:
             time.sleep(settle_time)
             if proc.poll() is not None:
+                _, stderr = proc.communicate()
+                err = stderr.decode(errors="replace").strip().split("\n")
+                tail = "\n".join(err[-5:]) if err else "(no stderr)"
+                print(f"    ffmpeg exited during settle:\n{tail}")
                 return None
         return proc
     except FileNotFoundError:
@@ -376,12 +430,43 @@ def finish_recording(proc, duration=VIDEO_DURATION):
         return False, "Video recording timed out"
 
 
+# Canvas "Download Submissions" wraps every zip with a prefix like
+#   "lastnamefirstname[_LATE]_<submission_id>_<attachment_id>_<original>"
+# e.g. "addepallimilan_78839_7441683_Lab_2_-_Phase_1_ma200.zip"
+#      "anginaromanus_LATE_78843_7461310_Lab_2_-_Phase_1_sra12.zip"
+# We want just the leading "<lastnamefirstname>" segment so the same
+# student is matched across the three phase assignments.
+_CANVAS_RE = re.compile(r"^([A-Za-z][A-Za-z\-]*)(?:_LATE)?_\d+_\d+_")
+
+
 def student_name_from_zip(zip_name):
     """
-    Extract a student identifier from the zip filename.
-    Strips common lab prefixes.
+    Extract a canonical student identifier from a submission filename.
+
+    Handles two conventions:
+
+    - Canvas "Download Submissions" export names of the form
+      ``<name>[_LATE]_<submission_id>_<attachment_id>_<original>`` —
+      returns just ``<name>`` lowercased, so the same student is
+      matched across all three phase assignments even though Canvas
+      generates different submission/attachment IDs per assignment
+      and may append a ``-1``/``-2`` suffix for resubmissions.
+
+    - Student-renamed files with a known ``Lab_N_`` prefix — strips
+      the prefix, preserving legacy Lab 1 workflows.
+
+    Accepts either a full zip filename (``foo.zip``) or a bare stem
+    (``foo``) — useful when normalizing keys already extracted from
+    video filenames.
     """
     base = os.path.splitext(zip_name)[0]
+
+    # Canvas wrapper takes priority.
+    m = _CANVAS_RE.match(base)
+    if m:
+        return m.group(1).lower()
+
+    # Fallback: strip known lab prefixes (Lab 1 workflow).
     for prefix in ("Lab_1_", "Lab 1_", "lab1_", "lab_1_",
                    "Lab_2_", "Lab 2_", "lab2_", "lab_2_",
                    "Lab_3_", "Lab 3_", "lab3_", "lab_3_"):

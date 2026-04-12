@@ -46,9 +46,15 @@ DEFAULT_SAMPLE_RADIUS = 15
 # Each group: (key, display_label, count)
 LED_GROUPS = [
     ("debug_led", "Debug/Programming LED", 1),
-    ("outer_ring", "Outer Ring (Hours)", 12),
-    ("inner_ring", "Inner Ring (Seconds)", 12),
+    ("outer_ring", "Outer Ring (Hours) - CLICK 12 O'CLOCK FIRST", 12),
+    ("inner_ring", "Inner Ring (Seconds) - CLICK 12 O'CLOCK FIRST", 12),
 ]
+
+# Groups whose first-placed point must be 12 o'clock for the scoring
+# logic to line up (outer/inner ring wrap detection assumes index 0 is
+# at the 12 o'clock position).  We highlight LED 1 of these groups with
+# a crosshair so the grader can always see where they started.
+RING_KEYS = ("outer_ring", "inner_ring")
 
 
 def flash_binary(binary_path, ccxml_path, dslite_path):
@@ -73,7 +79,7 @@ class CalibrationGUI:
     DRAG_THRESHOLD = 20  # pixels – click within this to grab an existing point
 
     def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS,
-                 video_path=None):
+                 video_path=None, preset=None):
         if video_path:
             self.cap = cv2.VideoCapture(video_path)
             if not self.cap.isOpened():
@@ -100,6 +106,54 @@ class CalibrationGUI:
         self._dragging = None
         # Brightness tracking: {(group_key, index): [min, max, count, sum]}
         self._brightness_stats = {}
+
+        # Preload positions/thresholds from an existing calibration.
+        if preset is not None:
+            self._apply_preset(preset)
+
+    def _apply_preset(self, cal):
+        """Seed positions and thresholds from a calibration dict."""
+        for key, _, count in LED_GROUPS:
+            raw = cal.get(key, [])
+            if not isinstance(raw, list):
+                continue
+            loaded = []
+            for p in raw[:count]:
+                try:
+                    loaded.append({"x": int(p["x"]), "y": int(p["y"])})
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self.positions[key] = loaded
+
+        # Fall through to the first incomplete group so the grader can
+        # finish placing any missing LEDs.
+        for gi, (k, _, cnt) in enumerate(LED_GROUPS):
+            if len(self.positions[k]) < cnt:
+                self.group_idx = gi
+                break
+        else:
+            # All groups already complete.
+            self.group_idx = len(LED_GROUPS) - 1
+
+        legacy_thr = cal.get("threshold")
+        if "outer_threshold" in cal:
+            self.outer_threshold = int(cal["outer_threshold"])
+        elif legacy_thr is not None:
+            self.outer_threshold = int(legacy_thr)
+        if "inner_threshold" in cal:
+            self.inner_threshold = int(cal["inner_threshold"])
+        elif legacy_thr is not None:
+            self.inner_threshold = int(legacy_thr)
+        if "debug_threshold" in cal:
+            self.debug_threshold = int(cal["debug_threshold"])
+        elif legacy_thr is not None:
+            self.debug_threshold = int(legacy_thr)
+
+        if "sample_radius" in cal:
+            try:
+                self.sample_radius = int(cal["sample_radius"])
+            except (TypeError, ValueError):
+                pass
 
     # ── helpers ──────────────────────────────────────────────────────
 
@@ -302,9 +356,29 @@ class CalibrationGUI:
                 cv2.circle(display, (pos["x"], pos["y"]),
                            self.sample_radius, draw_color, thickness)
 
-                label_text = str(i + 1)
+                # Mark LED 1 of each ring (the 12 o'clock reference)
+                # with a small crosshair so the grader can always tell
+                # which click was first — scoring assumes index 0 is
+                # at 12 o'clock.
+                if key in RING_KEYS and i == 0:
+                    r = self.sample_radius + 4
+                    cv2.line(display,
+                             (pos["x"] - r, pos["y"]),
+                             (pos["x"] + r, pos["y"]),
+                             draw_color, 1)
+                    cv2.line(display,
+                             (pos["x"], pos["y"] - r),
+                             (pos["x"], pos["y"] + r),
+                             draw_color, 1)
+                    cv2.putText(display, "12",
+                                (pos["x"] + r + 2, pos["y"] - r - 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                                draw_color, 1)
+
                 if self.show_brightness:
                     label_text = f"{int(bri)}"
+                else:
+                    label_text = str(i + 1)
                 cv2.putText(display, label_text,
                             (pos["x"] - 8, pos["y"] + 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, draw_color, 1)
@@ -334,10 +408,12 @@ class CalibrationGUI:
         cv2.putText(display, stats_text, (10, 55),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
+        label_mode = "brightness" if self.show_brightness else "LED id"
         cv2.putText(
             display,
-            f"[t]hreshold [d]cycle-thr [+/-]adj [b]ri-stats [r]eset-stats  "
-            f"drag=move  right-click=del  [u]ndo [f]reeze [s]ave [q]uit",
+            f"[i]label={label_mode}  [t]hreshold [d]cycle-thr [+/-]adj "
+            f"[b]ri-stats [r]eset-stats  drag=move  right-click=del  "
+            f"[u]ndo [f]reeze [s]ave [q]uit",
             (10, display.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1,
         )
@@ -355,10 +431,19 @@ class CalibrationGUI:
             cv2.waitKey(1)
         cv2.setMouseCallback(win, self._on_mouse)
 
-        _, label, _ = self._group()
-        print(f"Mark: {label}")
+        if self._all_done():
+            print("All LEDs already placed from preset. Adjust as needed, "
+                  "then press 's' to save or 'q' to quit.")
+        else:
+            print("*** IMPORTANT: for each ring, CLICK THE 12 O'CLOCK LED FIRST. ***")
+            print("    The grading script treats the first click as index 0 and")
+            print("    assumes it is at 12 o'clock; starting anywhere else will")
+            print("    cause hour/wrap rubric items to fail silently.\n")
+            _, label, _ = self._group()
+            print(f"Mark: {label}")
         print("Mouse: left-click=place, drag=move, right-click=delete")
-        print("Keys:  u=undo, t=threshold view, d=cycle threshold (outer/inner/debug),")
+        print("Keys:  u=undo, i=toggle label (brightness/LED id),")
+        print("       t=threshold view, d=cycle threshold (outer/inner/debug),")
         print("       +/-=adjust selected threshold, b=brightness stats, r=reset stats,")
         print("       f=freeze, s=save, q=quit\n")
 
@@ -394,6 +479,10 @@ class CalibrationGUI:
                     if self.positions[gkey]:
                         p = self.positions[gkey].pop()
                         print(f"  Back to previous group; undid ({p['x']}, {p['y']})")
+            elif key == ord("i"):
+                self.show_brightness = not self.show_brightness
+                mode = "brightness" if self.show_brightness else "LED id"
+                print(f"  Label mode: {mode}")
             elif key == ord("t"):
                 self.show_threshold = not self.show_threshold
             elif key == ord("d"):
@@ -491,6 +580,13 @@ def main():
         "--sample-radius", type=int, default=DEFAULT_SAMPLE_RADIUS,
         help=f"Pixel radius to sample around each LED (default: {DEFAULT_SAMPLE_RADIUS})",
     )
+    parser.add_argument(
+        "--load", metavar="FILE",
+        help="Load an existing calibration JSON to preset LED positions, "
+             "thresholds, and sample radius.  Useful for re-calibrating "
+             "against a new video (e.g. dimmer PWM'd Phase 3 footage) "
+             "without re-marking every LED from scratch.",
+    )
     args = parser.parse_args()
 
     if args.flash and args.submission:
@@ -544,15 +640,30 @@ def main():
             print(f"Error: {args.submission} is not a valid zip file")
             sys.exit(1)
 
+    preset = None
+    if args.load:
+        if not os.path.isfile(args.load):
+            print(f"Error: {args.load} not found")
+            sys.exit(1)
+        try:
+            with open(args.load) as f:
+                preset = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"Error: could not load {args.load}: {e}")
+            sys.exit(1)
+        print(f"Preloaded calibration from {args.load}")
+
     # Open camera FIRST so it's capturing before we flash.
     if args.video:
         if not os.path.isfile(args.video):
             print(f"Error: {args.video} not found")
             sys.exit(1)
         gui = CalibrationGUI(sample_radius=args.sample_radius,
-                             video_path=args.video)
+                             video_path=args.video,
+                             preset=preset)
     else:
-        gui = CalibrationGUI(args.camera, args.sample_radius)
+        gui = CalibrationGUI(args.camera, args.sample_radius,
+                             preset=preset)
 
     if flash_binary_path:
         print(f"Flashing: {flash_binary_path}")

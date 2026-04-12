@@ -144,6 +144,72 @@ def _check_wrap(seq):
     return False
 
 
+def _brightness_summary(values):
+    """
+    Summarize a 1-D list of brightness samples as a JSON-friendly dict.
+
+    Returns None if there are no samples.
+    """
+    if not values:
+        return None
+    arr = np.asarray(values, dtype=float)
+    return {
+        "n":    int(arr.size),
+        "mean": float(np.mean(arr)),
+        "std":  float(np.std(arr)),
+        "p10":  float(np.percentile(arr, 10)),
+        "p50":  float(np.median(arr)),
+        "p90":  float(np.percentile(arr, 90)),
+    }
+
+
+def _brightness_baseline(post_flash):
+    """
+    Accumulate per-ring ON and OFF brightness samples across the video.
+
+    For each frame, we use the already-thresholded boolean state as
+    the "ground truth" of which LEDs are supposed to be lit, and we
+    pool the raw brightness values into four buckets: outer-on,
+    outer-off, inner-on, inner-off.
+
+    This is cheap (one dict-of-lists pass over the timeline) and gives
+    the Phase 3 `reduced_brightness` check something to compare
+    against: what "full-on" looked like for this student's board in
+    this camera setup during Phase 1/2.
+
+    Returns a dict with keys outer_on / outer_off / inner_on /
+    inner_off, each mapping to a summary dict (see
+    _brightness_summary).  Returns None if the timeline carries no raw
+    brightness values (e.g. the caller passed a legacy bool-only
+    timeline).
+    """
+    if np is None:
+        return None
+    if not post_flash:
+        return None
+    if ("outer_brightness" not in post_flash[0]
+            or "inner_brightness" not in post_flash[0]):
+        return None
+
+    outer_on, outer_off = [], []
+    inner_on, inner_off = [], []
+    for s in post_flash:
+        ob = s["outer_brightness"]
+        ib = s["inner_brightness"]
+        o_state = s["outer"]
+        i_state = s["inner"]
+        for j in range(12):
+            (outer_on if o_state[j] else outer_off).append(ob[j])
+            (inner_on if i_state[j] else inner_off).append(ib[j])
+
+    return {
+        "outer_on":  _brightness_summary(outer_on),
+        "outer_off": _brightness_summary(outer_off),
+        "inner_on":  _brightness_summary(inner_on),
+        "inner_off": _brightness_summary(inner_off),
+    }
+
+
 def score(timeline):
     """
     Score video-detectable rubric items for Lab 1.
@@ -370,6 +436,17 @@ def score(timeline):
             })
 
     results["total_state_changes"] = str(len(all_changes))
+
+    # ── Brightness baseline (non-rubric metadata) ────────────────
+    # Collect per-ring ON/OFF brightness distributions so the Phase 3
+    # reduced_brightness check has a per-student reference for "what
+    # full-on looks like on this board in this video".  Stored under
+    # an underscore-prefixed key so downstream CSV/verdict logic
+    # (which iterates over SCORE_FIELDS and VIDEO_RUBRIC_ITEMS)
+    # silently ignores it.
+    baseline = _brightness_baseline(post_flash)
+    if baseline is not None:
+        results["_brightness_baseline"] = baseline
 
     # Include the initial LED state so callers can replay
     initial_outer = list(post_flash[0]["outer"])
