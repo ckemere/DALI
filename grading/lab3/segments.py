@@ -268,6 +268,10 @@ SEGMENTS: List[Segment] = [
     ),
 
     # -- 9 -------------------------------------------------------------
+    # For students WITHOUT brightness EC: 3 longs = Normal -> Hour ->
+    # Minute -> Normal.  For EC students this lands in Brightness mode
+    # instead -- that's expected.  The scorer checks: if this segment
+    # shows normal-clock behavior, pass; otherwise check segment 12.
     Segment(
         name="return_to_normal",
         description="Three long presses cycle Normal -> Hour -> Minute -> Normal; clock resumes",
@@ -277,6 +281,53 @@ SEGMENTS: List[Segment] = [
         graded_items=[
             "long_returns_to_normal",
             "clock_advances_after_return",
+        ],
+    ),
+
+    # -- 10 (brightness EC) --------------------------------------------
+    # Three longs enters Brightness mode for EC students. For non-EC
+    # students this lands back in Normal mode -- the brightness-specific
+    # graded_items will simply not pass and are ignored by the scorer.
+    Segment(
+        name="enter_brightness_set",
+        description="Three long presses enter Brightness-Set mode (EC); both LEDs flash",
+        stimulus=_longs(3),
+        warmup_ms=1500,
+        observe_ms=5000,
+        graded_items=[
+            "long_enters_brightness_set",
+            "both_flash_in_brightness_set",
+        ],
+    ),
+
+    # -- 11 (brightness EC) --------------------------------------------
+    # Enter brightness mode, then short presses to change brightness.
+    # The analyzer compares raw LED pixel brightness across the observe
+    # window to detect change.
+    Segment(
+        name="brightness_increment",
+        description="Enter brightness mode, 5 short presses change brightness (EC)",
+        stimulus=[*_longs(3), *_shorts(5)],
+        warmup_ms=1500,
+        observe_ms=3500,
+        graded_items=["brightness_responds_to_short"],
+    ),
+
+    # -- 12 (brightness EC) --------------------------------------------
+    # Four longs cycles Normal -> Hour -> Minute -> Brightness -> Normal
+    # for EC students. For non-EC students, 4 longs = Normal -> Hour ->
+    # Minute -> Normal -> Hour (ends in hour-set), so this segment's
+    # return-to-normal items won't pass -- but non-EC students already
+    # passed via segment 9, so the scorer ignores this.
+    Segment(
+        name="return_to_normal_ec",
+        description="Four long presses cycle through brightness back to Normal (EC); clock resumes",
+        stimulus=_longs(4),
+        warmup_ms=1500,
+        observe_ms=6000,
+        graded_items=[
+            "long_returns_to_normal_ec",
+            "clock_advances_after_return_ec",
         ],
     ),
 ]
