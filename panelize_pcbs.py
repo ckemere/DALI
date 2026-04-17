@@ -213,7 +213,7 @@ def precompute_pairs(boards: list[StudentBoard], spacing: float) -> list[PairInf
     """
     Precompute all pairwise boards in their most compact arrangement.
     For each pair, try 8 configurations (stack vertical/horizontal × rotations)
-    and keep the one with minimum wasted area.
+    and keep the one with minimum wasted area. Each board includes spacing on all sides.
     """
     pairs = []
 
@@ -221,7 +221,13 @@ def precompute_pairs(boards: list[StudentBoard], spacing: float) -> list[PairInf
         for j in range(i + 1, len(boards)):
             a, b = boards[i], boards[j]
 
-            # Compute each board's area (used to calculate waste)
+            # Board dimensions with spacing on all sides
+            a_w_padded = a.width_mm + 2 * spacing
+            a_h_padded = a.height_mm + 2 * spacing
+            b_w_padded = b.width_mm + 2 * spacing
+            b_h_padded = b.height_mm + 2 * spacing
+
+            # For waste calculation, use original board areas
             area_a = a.width_mm * a.height_mm
             area_b = b.width_mm * b.height_mm
             total_area = area_a + area_b
@@ -235,14 +241,14 @@ def precompute_pairs(boards: list[StudentBoard], spacing: float) -> list[PairInf
             # Try all 8 configurations: 4 rotation combos × 2 stack orientations
             # Each config is (a_w, a_h, b_w, b_h, rot_a, rot_b, stack_vertical)
             configs = [
-                (a.width_mm, a.height_mm, b.width_mm, b.height_mm, False, False, True),   # both normal, v stack
-                (a.width_mm, a.height_mm, b.width_mm, b.height_mm, False, False, False),  # both normal, h stack
-                (a.width_mm, a.height_mm, b.height_mm, b.width_mm, False, True, True),    # a normal, b rotated, v stack
-                (a.width_mm, a.height_mm, b.height_mm, b.width_mm, False, True, False),   # a normal, b rotated, h stack
-                (a.height_mm, a.width_mm, b.width_mm, b.height_mm, True, False, True),    # a rotated, b normal, v stack
-                (a.height_mm, a.width_mm, b.width_mm, b.height_mm, True, False, False),   # a rotated, b normal, h stack
-                (a.height_mm, a.width_mm, b.height_mm, b.width_mm, True, True, True),     # both rotated, v stack
-                (a.height_mm, a.width_mm, b.height_mm, b.width_mm, True, True, False),    # both rotated, h stack
+                (a_w_padded, a_h_padded, b_w_padded, b_h_padded, False, False, True),   # both normal, v stack
+                (a_w_padded, a_h_padded, b_w_padded, b_h_padded, False, False, False),  # both normal, h stack
+                (a_w_padded, a_h_padded, b_h_padded, b_w_padded, False, True, True),    # a normal, b rotated, v stack
+                (a_w_padded, a_h_padded, b_h_padded, b_w_padded, False, True, False),   # a normal, b rotated, h stack
+                (a_h_padded, a_w_padded, b_w_padded, b_h_padded, True, False, True),    # a rotated, b normal, v stack
+                (a_h_padded, a_w_padded, b_w_padded, b_h_padded, True, False, False),   # a rotated, b normal, h stack
+                (a_h_padded, a_w_padded, b_h_padded, b_w_padded, True, True, True),     # both rotated, v stack
+                (a_h_padded, a_w_padded, b_h_padded, b_w_padded, True, True, False),    # both rotated, h stack
             ]
 
             for a_w, a_h, b_w, b_h, rot_a, rot_b, stack_vertical in configs:
@@ -322,23 +328,20 @@ def bin_pack_panels(
     items = []
     board_in_pair = set()  # Track which boards are in pairs
 
-    # Create pair items
+    # Create pair items (pair dimensions already include spacing)
     for pair in pairs:
-        pair_w = pair.w + 2 * spacing
-        pair_h = pair.h + 2 * spacing
-
         # Try both orientations
-        fits_normal = (pair_w <= usable_w and pair_h <= usable_h)
-        fits_rotated = (pair_h <= usable_w and pair_w <= usable_h)
+        fits_normal = (pair.w <= usable_w and pair.h <= usable_h)
+        fits_rotated = (pair.h <= usable_w and pair.w <= usable_h)
 
         if not fits_normal and not fits_rotated:
             continue  # Skip pairs that don't fit in any orientation
 
         # Prefer orientation where width <= usable_w
         if fits_normal:
-            items.append(PackItem(pair=pair, w=pair_w, h=pair_h, rotated=False))
+            items.append(PackItem(pair=pair, w=pair.w, h=pair.h, rotated=False))
         else:
-            items.append(PackItem(pair=pair, w=pair_h, h=pair_w, rotated=True))
+            items.append(PackItem(pair=pair, w=pair.h, h=pair.w, rotated=True))
 
         board_in_pair.add(pair.board_a)
         board_in_pair.add(pair.board_b)
