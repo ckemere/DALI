@@ -76,6 +76,12 @@ class StudentBoard:
     width_mm: float = 0.0
     height_mm: float = 0.0
 
+    def __hash__(self):
+        return hash(self.net_id)
+
+    def __eq__(self, other):
+        return isinstance(other, StudentBoard) and self.net_id == other.net_id
+
 @dataclass
 class Placement:
     """A board placed on a panel."""
