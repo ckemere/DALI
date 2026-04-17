@@ -838,12 +838,23 @@ def main():
     print("=" * 60)
     print(f"  Students processed: {len(boards)}")
     print(f"  Panels created:     {len(panels)}")
+    total_board_area = 0.0
+    total_panel_area = 0.0
     for p in panels:
         w_in = p.width_mm / 25.4
         h_in = p.height_mm / 25.4
+        board_area = sum(pl.board.width_mm * pl.board.height_mm for pl in p.placements)
+        panel_area = p.width_mm * p.height_mm
+        efficiency = board_area / panel_area * 100 if panel_area > 0 else 0.0
+        total_board_area += board_area
+        total_panel_area += panel_area
         print(f"    Panel {p.index + 1}: {len(p.placements)} boards, "
               f"{p.width_mm:.1f} x {p.height_mm:.1f} mm "
-              f"({w_in:.2f} x {h_in:.2f} in)")
+              f"({w_in:.2f} x {h_in:.2f} in)  "
+              f"efficiency: {board_area:.0f}/{panel_area:.0f} mm² = {efficiency:.1f}%")
+    if len(panels) > 1:
+        overall = total_board_area / total_panel_area * 100 if total_panel_area > 0 else 0.0
+        print(f"  Overall efficiency: {total_board_area:.0f}/{total_panel_area:.0f} mm² = {overall:.1f}%")
     print(f"\n  Output directory: {args.output}")
     print(f"  Panel PCBs:       {panel_dir}")
     if not args.no_gerbers:
