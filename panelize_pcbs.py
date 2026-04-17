@@ -39,8 +39,6 @@ Requirements:
 
 JSON Format Example (panel_0.json):
   {
-    "width_mm": 254.0,
-    "height_mm": 304.8,
     "rows": [
       [
         {"netid": "hz111"},
@@ -139,8 +137,6 @@ class Panel:
 @dataclass
 class PanelSpec:
     """Panel specification from JSON: layout blueprint."""
-    width_mm: float
-    height_mm: float
     rows: list = field(default_factory=list)  # Each row is a list of PCB/SubPanel items
 
 
@@ -507,17 +503,11 @@ def generate_panel_json(panels: list[Panel], output_dir: Path):
             ]
             rows.append(row_items)
 
-        panel_spec = PanelSpec(
-            width_mm=p.width_mm,
-            height_mm=p.height_mm,
-            rows=rows,
-        )
+        panel_spec = PanelSpec(rows=rows)
         panel_specs.append((p.index, panel_spec))
 
-        # Write JSON file for this panel
+        # Write JSON file for this panel (dimensions will be calculated from placements)
         json_data = {
-            "width_mm": round(p.width_mm, 1),
-            "height_mm": round(p.height_mm, 1),
             "rows": rows,
         }
 
@@ -554,8 +544,6 @@ def load_panel_json(json_path: Path) -> tuple[PanelSpec, dict[str, int]]:
     extract_netids_from_rows(data.get("rows", []))
 
     panel_spec = PanelSpec(
-        width_mm=data["width_mm"],
-        height_mm=data["height_mm"],
         rows=data.get("rows", []),
     )
 
@@ -667,7 +655,7 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
         return placements, shelf_h
 
     for panel_idx, pspec in panel_specs:
-        panel = Panel(index=panel_idx, width_mm=pspec.width_mm, height_mm=pspec.height_mm)
+        panel = Panel(index=panel_idx)  # Dimensions will be calculated from placements
         current_y = frame_w  # No spacing before first row
 
         for row_idx, row in enumerate(pspec.rows):
