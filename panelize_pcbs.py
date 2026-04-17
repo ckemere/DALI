@@ -574,6 +574,7 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
     def place_items_in_row(items, current_x, current_y, spacing, boards):
         """
         Place a row of items (PCBs or subpanels), return list of placements and shelf height.
+        Returns (placements, shelf_h) where placements include a 'from_subpanel' flag.
         """
         placements = []
         shelf_h = 0.0
@@ -607,6 +608,7 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
                     'y': cy,
                     'rotated': rotated,
                     'h_with_space': h_with_space,
+                    'from_subpanel': False,
                 })
 
                 x += w_with_space
@@ -627,6 +629,9 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
                     row_placements, row_h = place_items_in_row(
                         sub_row, x, sub_current_y, spacing, boards
                     )
+                    # Mark all subpanel placements so we don't adjust their y-coordinates
+                    for pl in row_placements:
+                        pl['from_subpanel'] = True
                     sub_placements.extend(row_placements)
                     sub_current_y += row_h
                     sub_height += row_h
@@ -640,9 +645,10 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
                 x += sub_width
                 shelf_h = max(shelf_h, sub_height)
 
-        # Adjust y coordinates to center in shelf
+        # Adjust y coordinates to center regular PCBs in shelf, but not subpanel items
         for pl in placements:
-            pl['y'] = current_y + shelf_h / 2
+            if not pl.get('from_subpanel', False):
+                pl['y'] = current_y + shelf_h / 2
 
         return placements, shelf_h
 
