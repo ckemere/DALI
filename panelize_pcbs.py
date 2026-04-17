@@ -668,11 +668,11 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
 
     for panel_idx, pspec in panel_specs:
         panel = Panel(index=panel_idx, width_mm=pspec.width_mm, height_mm=pspec.height_mm)
-        current_y = frame_w + spacing
+        current_y = frame_w  # No spacing before first row
 
-        for row in pspec.rows:
+        for row_idx, row in enumerate(pspec.rows):
             row_placements, row_h = place_items_in_row(
-                row, frame_w + spacing, current_y, spacing, boards
+                row, frame_w, current_y, spacing, boards  # frame_w without extra spacing
             )
             # Convert placement dicts to Placement objects
             for pl_dict in row_placements:
@@ -682,7 +682,12 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
                     y_mm=pl_dict['y'],
                     rotated=pl_dict['rotated'],
                 ))
-            current_y += row_h
+
+            # Add spacing between rows, but not after the last row
+            if row_idx < len(pspec.rows) - 1:
+                current_y += row_h + spacing
+            else:
+                current_y += row_h
 
         panels.append(panel)
 
