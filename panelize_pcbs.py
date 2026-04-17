@@ -972,16 +972,28 @@ def main():
     pairs = precompute_pairs(boards, args.spacing)
     print(f"  Created {len(pairs)} pairs from {len(boards)} boards")
 
+    # Show top 5 pairs by compactness (lowest waste)
+    sorted_pairs = sorted(pairs, key=lambda p: p.waste)
+    print(f"  Top 5 most compact pairs (by waste):")
+    for pair in sorted_pairs[:5]:
+        a_rot = "rot" if pair.rot_a else "   "
+        b_rot = "rot" if pair.rot_b else "   "
+        print(f"    {pair.board_a.net_id} ({a_rot}) + {pair.board_b.net_id} ({b_rot}) "
+              f"→ {pair.w:.1f}×{pair.h:.1f} mm (waste={pair.waste:.1f})")
+
     # --- Phase 4: Bin pack ---
     print(f"\n[5/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
     panels = bin_pack_panels(boards, pairs, args.panel_width, args.panel_height,
                              args.spacing, args.frame_width)
 
     for p in panels:
-        print(f"\n  Panel {p.index + 1}: {len(p.placements)} boards")
+        print(f"\n  Panel {p.index + 1}: {len(p.placements)} boards ({p.width_mm:.1f} x {p.height_mm:.1f} mm)")
         for pl in p.placements:
-            rot_str = " (rotated)" if pl.rotated else ""
-            print(f"    {pl.board.net_id}: at ({pl.x_mm:.1f}, {pl.y_mm:.1f}){rot_str}")
+            rot_str = "90°" if pl.rotated else "0°"
+            w = pl.board.height_mm if pl.rotated else pl.board.width_mm
+            h = pl.board.width_mm if pl.rotated else pl.board.height_mm
+            print(f"    {pl.board.net_id:8s} @ ({pl.x_mm:7.1f}, {pl.y_mm:7.1f}) mm  "
+                  f"rot={rot_str}  dims={w:6.1f}×{h:6.1f} mm")
 
     # --- Phase 5: Build panels (with rails, tabs, mouse bites) ---
     print(f"\n[6/7] Building panel PCBs with tabs + mouse bites...")
