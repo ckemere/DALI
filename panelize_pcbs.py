@@ -654,7 +654,14 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
             row_placements, row_h = place_items_in_row(
                 row, frame_w + spacing, current_y, spacing, boards
             )
-            panel.placements.extend(row_placements)
+            # Convert placement dicts to Placement objects
+            for pl_dict in row_placements:
+                panel.placements.append(Placement(
+                    board=pl_dict['board'],
+                    x_mm=pl_dict['x'],
+                    y_mm=pl_dict['y'],
+                    rotated=pl_dict['rotated'],
+                ))
             current_y += row_h
 
         panels.append(panel)
