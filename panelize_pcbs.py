@@ -91,19 +91,28 @@ class Placement:
     rotated: bool = False   # True if rotated 90°
 
 @dataclass
+class PairArrangement:
+    """One specific arrangement of a pair (vertical or horizontal stack)."""
+    w: float        # width of this arrangement
+    h: float        # height of this arrangement
+    waste: float    # wasted area in this arrangement
+    rot_a: bool     # True if board_a is rotated
+    rot_b: bool     # True if board_b is rotated
+    offset_a_x: float  # x offset of board_a center from origin
+    offset_a_y: float  # y offset of board_a center from origin
+    offset_b_x: float  # x offset of board_b center from origin
+    offset_b_y: float  # y offset of board_b center from origin
+
+@dataclass
 class PairInfo:
-    """A precomputed pair of PCBs in their most compact orientation."""
+    """A precomputed pair of PCBs with multiple possible arrangements."""
     board_a: StudentBoard
     board_b: StudentBoard
-    w: float        # width of most compact arrangement
-    h: float        # height of most compact arrangement
-    waste: float    # wasted area (total bounding box area - sum of PCB areas)
-    rot_a: bool     # True if board_a is rotated in the most compact arrangement
-    rot_b: bool     # True if board_b is rotated in the most compact arrangement
-    offset_a_x: float = 0.0  # x offset of board_a center from pair origin
-    offset_a_y: float = 0.0  # y offset of board_a center from pair origin
-    offset_b_x: float = 0.0  # x offset of board_b center from pair origin
-    offset_b_y: float = 0.0  # y offset of board_b center from pair origin
+    arrangements: list = field(default_factory=list)  # List of PairArrangement
+
+    def best_arrangement(self) -> PairArrangement:
+        """Return the arrangement with minimum waste."""
+        return min(self.arrangements, key=lambda a: a.waste)
 
 @dataclass
 class Panel:
@@ -211,9 +220,9 @@ def read_bounding_boxes(boards: list[StudentBoard]) -> list[StudentBoard]:
 
 def precompute_pairs(boards: list[StudentBoard], spacing: float) -> list[PairInfo]:
     """
-    Precompute all pairwise boards in their most compact arrangement.
-    For each pair, try 8 configurations (stack vertical/horizontal × rotations)
-    and keep the one with minimum wasted area. Each board includes spacing on all sides.
+    Precompute all pairwise boards with all viable arrangements.
+    For each pair, store all 8 possible arrangements (4 rotation combos × 2 stack orientations).
+    Each board includes spacing on all sides.
     """
     pairs = []
 
@@ -232,14 +241,9 @@ def precompute_pairs(boards: list[StudentBoard], spacing: float) -> list[PairInf
             area_b = b.width_mm * b.height_mm
             total_area = area_a + area_b
 
-            best_waste = float('inf')
-            best_w, best_h = 0, 0
-            best_rot_a, best_rot_b = False, False
-            best_offset_a_x, best_offset_a_y = 0, 0
-            best_offset_b_x, best_offset_b_y = 0, 0
+            arrangements = []
 
             # Try all 8 configurations: 4 rotation combos × 2 stack orientations
-            # Each config is (a_w, a_h, b_w, b_h, rot_a, rot_b, stack_vertical)
             configs = [
                 (a_w_padded, a_h_padded, b_w_padded, b_h_padded, False, False, True),   # both normal, v stack
                 (a_w_padded, a_h_padded, b_w_padded, b_h_padded, False, False, False),  # both normal, h stack
@@ -257,43 +261,36 @@ def precompute_pairs(boards: list[StudentBoard], spacing: float) -> list[PairInf
                     w = max(a_w, b_w)
                     h = a_h + b_h
                     # Centers relative to bounding box origin (0, 0) at top-left
-                    offset_a_x = w / 2 - a_w / 2  # center A horizontally
-                    offset_a_y = a_h / 2          # center A in top half
-                    offset_b_x = w / 2 - b_w / 2  # center B horizontally
-                    offset_b_y = a_h + b_h / 2    # center B in bottom half
+                    offset_a_x = w / 2 - a_w / 2
+                    offset_a_y = a_h / 2
+                    offset_b_x = w / 2 - b_w / 2
+                    offset_b_y = a_h + b_h / 2
                 else:
                     # Stack horizontally (A left of B, centered vertically)
                     w = a_w + b_w
                     h = max(a_h, b_h)
                     # Centers relative to bounding box origin (0, 0) at top-left
-                    offset_a_x = a_w / 2          # center A in left half
-                    offset_a_y = h / 2 - a_h / 2  # center A vertically
-                    offset_b_x = a_w + b_w / 2    # center B in right half
-                    offset_b_y = h / 2 - b_h / 2  # center B vertically
+                    offset_a_x = a_w / 2
+                    offset_a_y = h / 2 - a_h / 2
+                    offset_b_x = a_w + b_w / 2
+                    offset_b_y = h / 2 - b_h / 2
 
                 bbox_area = w * h
                 waste = bbox_area - total_area
 
-                if waste < best_waste:
-                    best_waste = waste
-                    best_w, best_h = w, h
-                    best_rot_a, best_rot_b = rot_a, rot_b
-                    best_offset_a_x, best_offset_a_y = offset_a_x, offset_a_y
-                    best_offset_b_x, best_offset_b_y = offset_b_x, offset_b_y
+                arrangements.append(PairArrangement(
+                    w=w,
+                    h=h,
+                    waste=waste,
+                    rot_a=rot_a,
+                    rot_b=rot_b,
+                    offset_a_x=offset_a_x,
+                    offset_a_y=offset_a_y,
+                    offset_b_x=offset_b_x,
+                    offset_b_y=offset_b_y,
+                ))
 
-            pairs.append(PairInfo(
-                board_a=a,
-                board_b=b,
-                w=best_w,
-                h=best_h,
-                waste=best_waste,
-                rot_a=best_rot_a,
-                rot_b=best_rot_b,
-                offset_a_x=best_offset_a_x,
-                offset_a_y=best_offset_a_y,
-                offset_b_x=best_offset_b_x,
-                offset_b_y=best_offset_b_y,
-            ))
+            pairs.append(PairInfo(board_a=a, board_b=b, arrangements=arrangements))
 
     return pairs
 
@@ -321,30 +318,26 @@ def bin_pack_panels(
     class PackItem:
         board: Optional[StudentBoard] = None  # Single board, or None if pair
         pair: Optional[PairInfo] = None       # Pair, or None if single
-        w: float = 0.0                        # width including spacing
-        h: float = 0.0                        # height including spacing
-        rotated: bool = False
+        arrangement: Optional[PairArrangement] = None  # Specific arrangement if pair
+        w: float = 0.0
+        h: float = 0.0
 
     items = []
-    board_in_pair = set()  # Track which boards are in pairs
+    board_in_pair = set()
 
-    # Create pair items (pair dimensions already include spacing)
+    # Create pair items: for each pair, try each arrangement and create items
     for pair in pairs:
-        # Try both orientations
-        fits_normal = (pair.w <= usable_w and pair.h <= usable_h)
-        fits_rotated = (pair.h <= usable_w and pair.w <= usable_h)
+        best_arrangement = None
+        for arr in pair.arrangements:
+            if arr.w <= usable_w and arr.h <= usable_h:
+                if best_arrangement is None or arr.waste < best_arrangement.waste:
+                    best_arrangement = arr
 
-        if not fits_normal and not fits_rotated:
-            continue  # Skip pairs that don't fit in any orientation
-
-        # Prefer orientation where width <= usable_w
-        if fits_normal:
-            items.append(PackItem(pair=pair, w=pair.w, h=pair.h, rotated=False))
-        else:
-            items.append(PackItem(pair=pair, w=pair.h, h=pair.w, rotated=True))
-
-        board_in_pair.add(pair.board_a)
-        board_in_pair.add(pair.board_b)
+        if best_arrangement:
+            items.append(PackItem(pair=pair, arrangement=best_arrangement,
+                                 w=best_arrangement.w, h=best_arrangement.h))
+            board_in_pair.add(pair.board_a)
+            board_in_pair.add(pair.board_b)
 
     # Create single board items (excluding those in pairs)
     oversized = []
@@ -425,42 +418,28 @@ def bin_pack_panels(
 
         # Place item
         if item.pair:
-            # For pairs, place both boards with offsets from the pair's center
-            pair_cx = frame_w + shelf_x + item.w / 2
-            pair_cy = frame_w + shelf_y + item.h / 2
+            # For pairs, use the stored arrangement (no rotation needed)
+            arr = item.arrangement
+            pair_cx = frame_w + shelf_x + arr.w / 2
+            pair_cy = frame_w + shelf_y + arr.h / 2
 
-            # Board rotations: if pair is flipped in shelf (rotated=True), toggle both rotations
-            rot_a = item.pair.rot_a ^ item.rotated
-            rot_b = item.pair.rot_b ^ item.rotated
-
-            # Apply offsets: transform from bounding box origin-relative to center-relative
-            # When rotated, item.w and item.h are swapped, so we need to adjust the origin point
-            if item.rotated:
-                # Pair rotated 90°: original (w, h) becomes (h, w) for shelf
-                # Original offset (x, y) in (w, h) box → new offset in (h, w) box after 90° CCW rotation
-                # New position = (h/2 - original_y, original_x - w/2) relative to center
-                offset_a_x = item.pair.offset_a_y - item.w / 2
-                offset_a_y = item.pair.offset_a_x - item.h / 2
-                offset_b_x = item.pair.offset_b_y - item.w / 2
-                offset_b_y = item.pair.offset_b_x - item.h / 2
-            else:
-                # Pair in normal orientation: offsets relative to center
-                offset_a_x = item.pair.offset_a_x - item.w / 2
-                offset_a_y = item.pair.offset_a_y - item.h / 2
-                offset_b_x = item.pair.offset_b_x - item.w / 2
-                offset_b_y = item.pair.offset_b_y - item.h / 2
+            # Convert offsets from box-origin-relative to center-relative
+            offset_a_x = arr.offset_a_x - arr.w / 2
+            offset_a_y = arr.offset_a_y - arr.h / 2
+            offset_b_x = arr.offset_b_x - arr.w / 2
+            offset_b_y = arr.offset_b_y - arr.h / 2
 
             current_panel.placements.append(Placement(
                 board=item.pair.board_a,
                 x_mm=pair_cx + offset_a_x,
                 y_mm=pair_cy + offset_a_y,
-                rotated=rot_a,
+                rotated=arr.rot_a,
             ))
             current_panel.placements.append(Placement(
                 board=item.pair.board_b,
                 x_mm=pair_cx + offset_b_x,
                 y_mm=pair_cy + offset_b_y,
-                rotated=rot_b,
+                rotated=arr.rot_b,
             ))
             used_boards.add(item.pair.board_a)
             used_boards.add(item.pair.board_b)
