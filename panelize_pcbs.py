@@ -622,7 +622,7 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
                 if item_idx > 0:
                     x += spacing
 
-                for sub_row in sub_rows:
+                for sub_row_idx, sub_row in enumerate(sub_rows):
                     row_placements, row_h = place_items_in_row(
                         sub_row, x, sub_current_y, spacing, boards
                     )
@@ -630,8 +630,13 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
                     for pl in row_placements:
                         pl['from_subpanel'] = True
                     sub_placements.extend(row_placements)
-                    sub_current_y += row_h
-                    sub_height += row_h
+
+                    # Add spacing between rows within subpanel, but not after last row
+                    if sub_row_idx < len(sub_rows) - 1:
+                        sub_current_y += row_h + spacing
+                    else:
+                        sub_current_y += row_h
+                    sub_height += row_h + (spacing if sub_row_idx < len(sub_rows) - 1 else 0)
 
                     # Track the maximum width of subpanel
                     if row_placements:
