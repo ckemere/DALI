@@ -27,6 +27,7 @@ Requirements:
 import os
 import re
 import sys
+import random
 import shutil
 import zipfile
 import argparse
@@ -758,11 +759,16 @@ def main():
                         help="Mouse bite hole diameter in mm (default: 0.5)")
     parser.add_argument("--mouse-bite-spacing", type=float, default=1.0,
                         help="Mouse bite hole spacing in mm (default: 1.0)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for layout engine (default: 42)")
     args = parser.parse_args()
+
+    random.seed(args.seed)
 
     print("=" * 60)
     print("DALI PCB Panelization")
     print("=" * 60)
+    print(f"  Random seed: {args.seed}")
 
     # --- Phase 1: Parse & extract (pure Python) ---
     print(f"\n[1/7] Parsing submissions from {args.zip_dir}")
