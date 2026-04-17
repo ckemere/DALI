@@ -195,6 +195,7 @@ def bin_pack_panels(
     panel_h: float,
     spacing: float,
     frame_w: float,
+    gap_height_margin: float = 0.10,
 ) -> list[Panel]:
     """
     Pack boards into panels using Shelf Next-Fit Decreasing Height with gap
@@ -274,29 +275,45 @@ def bin_pack_panels(
         ))
         shelf_x += w
 
+    def _best_seq(candidates, slot_w, slot_h):
+        """Return the board sequence (item, fw, fh, frot) that maximises total
+        area placed in this slot. Full combinatorial search; fast in practice
+        because slot_w is narrow so few boards from remaining qualify."""
+        if slot_h <= 0 or not candidates:
+            return []
+        best_area = 0
+        best_seq = []
+        for i, it in enumerate(candidates):
+            for fw, fh, frot in [(it.w, it.h, it.rotated), (it.h, it.w, not it.rotated)]:
+                if fw > slot_w or fh > slot_h:
+                    continue
+                rest = candidates[:i] + candidates[i + 1:]
+                tail = _best_seq(rest, slot_w, slot_h - fh)
+                area = it.board.width_mm * it.board.height_mm + sum(
+                    e[0].board.width_mm * e[0].board.height_mm for e in tail
+                )
+                if area > best_area:
+                    best_area = area
+                    best_seq = [(it, fw, fh, frot)] + tail
+        return best_seq
+
     def fill_subslot(slot_x, slot_y, slot_w, slot_h):
-        """Place the first board from remaining that fits in the slot (both
-        orientations tried), then recurse into the leftover space below it."""
-        found = None
-        for i, it in enumerate(remaining):
-            if it.w <= slot_w and it.h <= slot_h:
-                found = (i, it.w, it.h, it.rotated, it.board)
-                break
-            if it.h <= slot_w and it.w <= slot_h:
-                found = (i, it.h, it.w, not it.rotated, it.board)
-                break
-        if found is None:
-            return
-        i, fw, fh, frot, fboard = found
-        remaining.pop(i)
-        current_panel.placements.append(Placement(
-            board=fboard,
-            x_mm=slot_x + fw / 2,
-            y_mm=slot_y + fh / 2,
-            rotated=frot,
-        ))
-        if slot_h - fh > 0:
-            fill_subslot(slot_x, slot_y + fh, slot_w, slot_h - fh)
+        """Fill a sub-slot by finding the combination of remaining boards that
+        maximises total board area placed (both orientations, full search)."""
+        seq = _best_seq(remaining, slot_w, slot_h)
+        y = slot_y
+        for it, fw, fh, frot in seq:
+            for k, r in enumerate(remaining):
+                if r is it:
+                    remaining.pop(k)
+                    break
+            current_panel.placements.append(Placement(
+                board=it.board,
+                x_mm=slot_x + fw / 2,
+                y_mm=y + fh / 2,
+                rotated=frot,
+            ))
+            y += fh
 
     def fill_all_subslots():
         """Once shelf_h is final, fill the unused rectangle below each board
@@ -313,17 +330,19 @@ def bin_pack_panels(
 
     def fill_gap():
         """Fill remaining horizontal shelf space with any waiting board,
-        trying both orientations. Candidates must not exceed shelf_h."""
+        trying both orientations. Candidates may be up to gap_height_margin
+        taller than shelf_h, which raises the shelf and widens sub-slots."""
         while True:
             gap_w = usable_w - shelf_x
             if gap_w <= 0:
                 break
+            max_h = min(shelf_h * (1 + gap_height_margin), usable_h - shelf_y)
             found = None
             for i, it in enumerate(remaining):
-                if it.w <= gap_w and it.h <= shelf_h:
+                if it.w <= gap_w and it.h <= max_h:
                     found = (i, it.w, it.h, it.rotated, it.board)
                     break
-                if it.h <= gap_w and it.w <= shelf_h:
+                if it.h <= gap_w and it.w <= max_h:
                     found = (i, it.h, it.w, not it.rotated, it.board)
                     break
             if found is None:
@@ -837,6 +856,10 @@ def main():
                         help="Mouse bite hole diameter in mm (default: 0.5)")
     parser.add_argument("--mouse-bite-spacing", type=float, default=1.0,
                         help="Mouse bite hole spacing in mm (default: 1.0)")
+    parser.add_argument("--gap-height-margin", type=float, default=0.10,
+                        help="Allow gap-filling boards up to this fraction taller than "
+                             "the current shelf height, raising the shelf slightly to "
+                             "improve horizontal packing (default: 0.10 = 10%%)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for layout engine (default: 42)")
     args = parser.parse_args()
@@ -872,7 +895,8 @@ def main():
     # --- Phase 3: Bin pack ---
     print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
     panels = bin_pack_panels(boards, args.panel_width, args.panel_height,
-                             args.spacing, args.frame_width)
+                             args.spacing, args.frame_width,
+                             gap_height_margin=args.gap_height_margin)
 
     for p in panels:
         print(f"\n  Panel {p.index + 1}: {len(p.placements)} boards")
