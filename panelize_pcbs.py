@@ -368,29 +368,20 @@ def bin_pack_panels(
     # Sort by height descending (classic shelf heuristic)
     items.sort(key=lambda it: it.h, reverse=True)
 
-    # Determine starting shelf height
-    max_single_h = max((it.h for it in items if it.board is not None), default=0)
-    min_pair_h = min((min(it.w, it.h) for it in items if it.pair is not None), default=float('inf'))
-
-    if min_pair_h > max_single_h:
-        shelf_start_h = min_pair_h
-    else:
-        shelf_start_h = max_single_h
-
     panels: list[Panel] = []
     current_panel = Panel(index=0)
     used_boards = set()  # Track boards used in placed pairs
     shelf_y = 0.0
-    shelf_h = shelf_start_h if shelf_start_h > 0 else 0
+    shelf_h = 0.0  # Will be set by first item on each shelf
     shelf_x = 0.0
 
     def new_panel():
-        nonlocal current_panel, shelf_y, shelf_h, shelf_x, used_boards
+        nonlocal current_panel, shelf_y, shelf_h, shelf_x
         if current_panel.placements:
             panels.append(current_panel)
         current_panel = Panel(index=len(panels))
         shelf_y = 0.0
-        shelf_h = shelf_start_h if shelf_start_h > 0 else 0
+        shelf_h = 0.0  # Will be set by first item on this shelf
         shelf_x = 0.0
 
     def new_shelf(item_h):
