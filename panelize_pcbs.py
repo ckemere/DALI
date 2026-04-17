@@ -433,17 +433,18 @@ def bin_pack_panels(
             rot_a = item.pair.rot_a ^ item.rotated
             rot_b = item.pair.rot_b ^ item.rotated
 
-            # Apply offsets: if pair is rotated for shelf, swap x/y offsets and negate appropriately
+            # Apply offsets: transform from bounding box origin-relative to center-relative
+            # When rotated, item.w and item.h are swapped, so we need to adjust the origin point
             if item.rotated:
-                # Pair is rotated 90°: swap and rotate offset vectors
-                # (x, y) → (y, -x) for 90° counterclockwise rotation around center
-                # But we're rotating around the center of the pair, so offsets become relative to rotated frame
-                offset_a_x = item.pair.offset_a_y - item.h / 2
-                offset_a_y = item.w / 2 - item.pair.offset_a_x
-                offset_b_x = item.pair.offset_b_y - item.h / 2
-                offset_b_y = item.w / 2 - item.pair.offset_b_x
+                # Pair rotated 90°: original (w, h) becomes (h, w) for shelf
+                # Original offset (x, y) in (w, h) box → new offset in (h, w) box after 90° CCW rotation
+                # New position = (h/2 - original_y, original_x - w/2) relative to center
+                offset_a_x = item.pair.offset_a_y - item.w / 2
+                offset_a_y = item.pair.offset_a_x - item.h / 2
+                offset_b_x = item.pair.offset_b_y - item.w / 2
+                offset_b_y = item.pair.offset_b_x - item.h / 2
             else:
-                # Pair is in normal orientation: offsets relative to center
+                # Pair in normal orientation: offsets relative to center
                 offset_a_x = item.pair.offset_a_x - item.w / 2
                 offset_a_y = item.pair.offset_a_y - item.h / 2
                 offset_b_x = item.pair.offset_b_x - item.w / 2
