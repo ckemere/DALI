@@ -227,8 +227,14 @@ def bin_pack_panels(
             oversized.append(b)
             continue
 
-        # Prefer orientation where width <= usable_w (better shelf packing)
-        if fits_normal:
+        # Prefer landscape orientation (smaller height) to reduce shelf height
+        # and fit more rows; fall back to whichever orientation fits if only one does.
+        if fits_normal and fits_rotated:
+            if h <= w:
+                items.append(PackItem(board=b, w=w, h=h, rotated=False))
+            else:
+                items.append(PackItem(board=b, w=h, h=w, rotated=True))
+        elif fits_normal:
             items.append(PackItem(board=b, w=w, h=h, rotated=False))
         else:
             items.append(PackItem(board=b, w=h, h=w, rotated=True))
