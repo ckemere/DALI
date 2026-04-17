@@ -2,18 +2,32 @@
 """
 panelize_class.py — Panelize a class set of KiCad PCB submissions from Canvas.
 
-Workflow:
+Two workflows supported:
+
+WORKFLOW 1: Automatic Canvas Zip Parsing + Packing
   1. Parse Canvas zip submissions, keep latest version per student
   2. Extract .kicad_pcb files into per-student directories
   3. Compute bounding boxes
   4. Bin-pack into panels (constrained to max panel size)
-  5. Build each panel using KiKit's Python API
-  6. Copy Edge.Cuts outlines to F.Cu (for maskless/screenless fab)
-  7. Export Gerbers (F.Cu, B.Cu, Edge.Cuts, drills)
-  8. Generate SVG reference map with student names
+  5. Generate YAML specification showing the computed layout
+  6. Build each panel using KiKit's Python API
+  7. Copy Edge.Cuts outlines to F.Cu (for maskless/screenless fab)
+  8. Export Gerbers (F.Cu, B.Cu, Edge.Cuts, drills)
+  9. Generate SVG reference map with student names
+
+WORKFLOW 2: YAML Configuration with Custom Layout
+  1. Load panel layout from YAML specification
+  2. Extract .kicad_pcb files for specified netids
+  3. Compute bounding boxes
+  4. Reconstruct panels according to YAML layout (with custom rotations)
+  5. Build panels, export Gerbers, generate reference maps
 
 Usage:
-  python panelize_class.py /path/to/canvas/zips/ -o /path/to/output/
+  # Automatic packing from Canvas zips
+  python panelize_pcbs.py /path/to/canvas/zips/ -o /path/to/output/
+
+  # Using YAML configuration to customize layout
+  python panelize_pcbs.py /path/to/canvas/zips/ --yaml panel_layout.yaml -o /path/to/output/
 
   Run with KiCad's Python interpreter (or a venv with --system-site-packages):
     macOS:  /Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
@@ -22,6 +36,32 @@ Usage:
 Requirements:
   - KiCad 8+
   - KiKit: pip install kikit
+  - PyYAML: pip install pyyaml
+
+YAML Format Example:
+  panels:
+    - index: 0
+      width_mm: 254.0
+      height_mm: 304.8
+      subpanels:
+        - name: "row_1"
+          pcbs:
+            - netid: "hz108"
+              rotation: 0
+            - netid: "hz109"
+              rotation: 90
+        - name: "row_2"
+          pcbs:
+            - netid: "hz110"
+            - netid: "hz111"
+              rotation: 90
+    - index: 1
+      width_mm: 254.0
+      height_mm: 304.8
+      subpanels:
+        - name: "row_1"
+          pcbs:
+            - netid: "hz112"
 """
 
 import os
@@ -32,9 +72,10 @@ import shutil
 import zipfile
 import argparse
 import subprocess
+import yaml
 from pathlib import Path
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -92,6 +133,26 @@ class Panel:
     placements: list = field(default_factory=list)
     width_mm: float = 0.0
     height_mm: float = 0.0
+
+@dataclass
+class PCBSpec:
+    """PCB specification from YAML: netid with optional rotation."""
+    netid: str
+    rotation: int = 0  # degrees: 0, 90, 180, 270
+
+@dataclass
+class SubPanel:
+    """A logical grouping of PCBs (usually a row/shelf)."""
+    name: str
+    pcbs: list[PCBSpec] = field(default_factory=list)
+
+@dataclass
+class PanelSpec:
+    """Panel specification from YAML: layout blueprint."""
+    index: int
+    width_mm: float
+    height_mm: float
+    subpanels: list[SubPanel] = field(default_factory=list)
 
 
 # ===========================================================================
@@ -403,6 +464,185 @@ def bin_pack_panels(
                      for pl in p.placements) + frame_w
         p.width_mm = min(max_x, panel_w)
         p.height_mm = min(max_y, panel_h)
+
+    return panels
+
+
+# ===========================================================================
+# 3.5 YAML Configuration I/O
+# ===========================================================================
+
+def generate_panel_yaml(panels: list[Panel], output_path: Path):
+    """
+    Generate a YAML file from computed panels, organizing placements by rows
+    (shelves) as subPanels. This shows the current layout blueprint.
+    """
+    panel_specs = []
+    for p in panels:
+        # Group placements by y-coordinate (same shelf/row) with tolerance
+        rows: dict[int, list] = {}
+        tolerance_mm = 1.0
+
+        for pl in sorted(p.placements, key=lambda x: (x.y_mm, x.x_mm)):
+            # Find which row this placement belongs to
+            row_key = None
+            for existing_y in rows:
+                if abs(pl.y_mm - existing_y) < tolerance_mm:
+                    row_key = existing_y
+                    break
+
+            if row_key is None:
+                row_key = int(pl.y_mm * 10) // 10  # Round to nearest 0.1mm
+
+            if row_key not in rows:
+                rows[row_key] = []
+            rows[row_key].append(pl)
+
+        # Create subPanels from rows
+        subpanels = []
+        for row_idx, (y_key, placements) in enumerate(sorted(rows.items())):
+            pcbs = [
+                PCBSpec(netid=pl.board.net_id, rotation=90 if pl.rotated else 0)
+                for pl in placements
+            ]
+            subpanels.append(SubPanel(
+                name=f"row_{row_idx + 1}",
+                pcbs=pcbs,
+            ))
+
+        panel_specs.append(PanelSpec(
+            index=p.index,
+            width_mm=p.width_mm,
+            height_mm=p.height_mm,
+            subpanels=subpanels,
+        ))
+
+    # Convert to dict for YAML serialization
+    data = {
+        'panels': [
+            {
+                'index': ps.index,
+                'width_mm': round(ps.width_mm, 1),
+                'height_mm': round(ps.height_mm, 1),
+                'subpanels': [
+                    {
+                        'name': sp.name,
+                        'pcbs': [
+                            {'netid': pc.netid, 'rotation': pc.rotation}
+                            for pc in sp.pcbs
+                        ],
+                    }
+                    for sp in ps.subpanels
+                ],
+            }
+            for ps in panel_specs
+        ]
+    }
+
+    with open(output_path, 'w') as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+    print(f"  Generated YAML panel specification: {output_path}")
+    return panel_specs
+
+
+def load_panel_yaml(yaml_path: Path) -> tuple[list[PanelSpec], dict[str, int]]:
+    """
+    Load panel specifications from YAML file.
+    Returns (panel_specs, netid_to_rotation_map) where rotation is in degrees.
+    """
+    with open(yaml_path, 'r') as f:
+        data = yaml.safe_load(f)
+
+    panel_specs = []
+    netid_rotation = {}
+
+    for panel_data in data.get('panels', []):
+        subpanels = []
+        for sp_data in panel_data.get('subpanels', []):
+            pcbs = [
+                PCBSpec(
+                    netid=pc['netid'],
+                    rotation=pc.get('rotation', 0),
+                )
+                for pc in sp_data.get('pcbs', [])
+            ]
+            subpanels.append(SubPanel(name=sp_data['name'], pcbs=pcbs))
+
+            # Track rotations by netid
+            for pcb in pcbs:
+                netid_rotation[pcb.netid] = pcb.rotation
+
+        panel_specs.append(PanelSpec(
+            index=panel_data['index'],
+            width_mm=panel_data['width_mm'],
+            height_mm=panel_data['height_mm'],
+            subpanels=subpanels,
+        ))
+
+    return panel_specs, netid_rotation
+
+
+def apply_yaml_layout(boards: dict[str, StudentBoard], panel_specs: list[PanelSpec],
+                      frame_w: float, spacing: float) -> list[Panel]:
+    """
+    Reconstruct Panel objects from YAML specifications using actual board dimensions.
+    Respects rotation and netid specifications from YAML.
+    """
+    panels = []
+
+    for pspec in panel_specs:
+        panel = Panel(index=pspec.index, width_mm=pspec.width_mm, height_mm=pspec.height_mm)
+        current_y = frame_w + spacing
+
+        for subpanel in pspec.subpanels:
+            shelf_h = 0.0
+            current_x = frame_w + spacing
+
+            # First pass: place boards and compute shelf height
+            subpanel_placements = []
+            for pcb_spec in subpanel.pcbs:
+                if pcb_spec.netid not in boards:
+                    print(f"  WARNING: netid {pcb_spec.netid} not found, skipping")
+                    continue
+
+                board = boards[pcb_spec.netid]
+                rotated = (pcb_spec.rotation % 180) == 90
+
+                # Dimensions considering rotation
+                w = board.height_mm if rotated else board.width_mm
+                h = board.width_mm if rotated else board.height_mm
+                w_with_space = w + 2 * spacing
+                h_with_space = h + 2 * spacing
+
+                cx = current_x + w_with_space / 2
+                cy = current_y + h_with_space / 2
+
+                subpanel_placements.append({
+                    'board': board,
+                    'x': cx,
+                    'y': cy,
+                    'rotated': rotated,
+                    'h_with_space': h_with_space,
+                })
+
+                current_x += w_with_space
+                shelf_h = max(shelf_h, h_with_space)
+
+            # Add placements to panel
+            for pl_data in subpanel_placements:
+                # Adjust y to account for final shelf height
+                pl_data['y'] = current_y + shelf_h / 2
+                panel.placements.append(Placement(
+                    board=pl_data['board'],
+                    x_mm=pl_data['x'],
+                    y_mm=pl_data['y'],
+                    rotated=pl_data['rotated'],
+                ))
+
+            current_y += shelf_h
+
+        panels.append(panel)
 
     return panels
 
@@ -836,10 +1076,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Panelize a class set of KiCad PCB submissions from Canvas."
     )
-    parser.add_argument("zip_dir", type=Path,
-                        help="Directory containing Canvas submission zip files")
+    parser.add_argument("zip_dir", type=Path, nargs='?',
+                        help="Directory containing Canvas submission zip files (optional if --yaml is provided)")
     parser.add_argument("-o", "--output", type=Path, default=Path("./panel_output"),
                         help="Output directory (default: ./panel_output)")
+    parser.add_argument("--yaml", type=Path,
+                        help="YAML file specifying panel layout (overrides automatic packing)")
     parser.add_argument("--panel-width", type=float, default=254.0,
                         help="Max panel width in mm (default: 254 = 10in)")
     parser.add_argument("--panel-height", type=float, default=304.8,
@@ -862,7 +1104,12 @@ def main():
                              "improve horizontal packing (default: 0.10 = 10%%)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for layout engine (default: 42)")
+    parser.add_argument("--generate-yaml", action="store_true",
+                        help="Generate YAML specification file from computed layout (default: always on)")
     args = parser.parse_args()
+
+    if not args.yaml and not args.zip_dir:
+        parser.error("Either zip_dir or --yaml must be provided")
 
     random.seed(args.seed)
 
@@ -871,32 +1118,74 @@ def main():
     print("=" * 60)
     print(f"  Random seed: {args.seed}")
 
-    # --- Phase 1: Parse & extract (pure Python) ---
-    print(f"\n[1/7] Parsing submissions from {args.zip_dir}")
-    boards = parse_submissions(args.zip_dir)
-
+    _import_kicad()
     work_dir = args.output / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[2/7] Extracting latest submissions to {work_dir}")
-    boards = extract_submissions(boards, work_dir)
+    # --- Phase 1 & 2: Parse & extract (pure Python) ---
+    boards = []
+    boards_by_netid = {}
 
-    if not boards:
-        sys.exit("ERROR: No valid submissions found!")
+    if args.yaml:
+        # Load from YAML - still need to extract PCBs if using Canvas zips
+        print(f"\n[1/2] Loading panel specification from {args.yaml}")
+        panel_specs, netid_rotation = load_panel_yaml(args.yaml)
 
-    # --- Phase 2: Read bboxes (needs pcbnew) ---
-    print(f"\n[3/7] Reading board dimensions...")
-    _import_kicad()
-    boards = read_bounding_boxes(boards)
+        if args.zip_dir:
+            print(f"\n[2a/4] Parsing submissions from {args.zip_dir}")
+            boards = parse_submissions(args.zip_dir)
 
-    if not boards:
-        sys.exit("ERROR: No valid boards after reading dimensions!")
+            print(f"[2b/4] Extracting latest submissions to {work_dir}")
+            boards = extract_submissions(boards, work_dir)
 
-    # --- Phase 3: Bin pack ---
-    print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
-    panels = bin_pack_panels(boards, args.panel_width, args.panel_height,
-                             args.spacing, args.frame_width,
-                             gap_height_margin=args.gap_height_margin)
+            if not boards:
+                sys.exit("ERROR: No valid submissions found!")
+
+            boards_by_netid = {b.net_id: b for b in boards}
+        else:
+            sys.exit("ERROR: YAML mode requires --yaml to specify panel layout")
+
+        print(f"\n[3/4] Reading board dimensions...")
+        boards = read_bounding_boxes(boards)
+
+        if not boards:
+            sys.exit("ERROR: No valid boards after reading dimensions!")
+
+        # Update boards_by_netid with dimension data
+        boards_by_netid = {b.net_id: b for b in boards}
+
+        # Apply YAML layout specification
+        print(f"[4/4] Applying YAML panel layout...")
+        panels = apply_yaml_layout(boards_by_netid, panel_specs, args.frame_width, args.spacing)
+
+    else:
+        # Original Canvas zip parsing workflow
+        print(f"\n[1/7] Parsing submissions from {args.zip_dir}")
+        boards = parse_submissions(args.zip_dir)
+
+        print(f"\n[2/7] Extracting latest submissions to {work_dir}")
+        boards = extract_submissions(boards, work_dir)
+
+        if not boards:
+            sys.exit("ERROR: No valid submissions found!")
+
+        # --- Phase 2: Read bboxes (needs pcbnew) ---
+        print(f"\n[3/7] Reading board dimensions...")
+        boards = read_bounding_boxes(boards)
+
+        if not boards:
+            sys.exit("ERROR: No valid boards after reading dimensions!")
+
+        # --- Phase 3: Bin pack ---
+        print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
+        panels = bin_pack_panels(boards, args.panel_width, args.panel_height,
+                                 args.spacing, args.frame_width,
+                                 gap_height_margin=args.gap_height_margin)
+
+        # Generate YAML from computed layout
+        print(f"\n[4b/7] Generating YAML panel specification...")
+        yaml_path = args.output / "panel_layout.yaml"
+        generate_panel_yaml(panels, yaml_path)
 
     for p in panels:
         print(f"\n  Panel {p.index + 1}: {len(p.placements)} boards")
@@ -904,8 +1193,13 @@ def main():
             rot_str = " (rotated)" if pl.rotated else ""
             print(f"    {pl.board.net_id}: at ({pl.x_mm:.1f}, {pl.y_mm:.1f}){rot_str}")
 
-    # --- Phase 4: Build panels (with rails, tabs, mouse bites) ---
-    print(f"\n[5/7] Building panel PCBs with tabs + mouse bites...")
+    # --- Phase 5/4b: Build panels (with rails, tabs, mouse bites) ---
+    phase_label = "4c" if args.yaml else "5"
+    if args.yaml:
+        print(f"\n[{phase_label}/4] Building panel PCBs with tabs + mouse bites...")
+    else:
+        print(f"\n[{phase_label}/7] Building panel PCBs with tabs + mouse bites...")
+
     panel_dir = args.output / "panels"
     panel_dir.mkdir(parents=True, exist_ok=True)
 
@@ -925,17 +1219,28 @@ def main():
             print(f"  You may need to adjust the KiKit API calls for your version.")
             raise
 
-    # --- Phase 5: Export Gerbers ---
+    # --- Phase 6/4c: Export Gerbers ---
+    phase_label = "4c" if args.yaml else "6"
     if not args.no_gerbers:
-        print(f"\n[6/7] Exporting Gerbers...")
+        if args.yaml:
+            print(f"\n[{phase_label}/4] Exporting Gerbers...")
+        else:
+            print(f"\n[{phase_label}/7] Exporting Gerbers...")
         gerber_dir = args.output / "gerbers"
         for p, path in panel_paths:
             export_gerbers(path, gerber_dir)
     else:
-        print(f"\n[6/7] Skipping Gerber export (--no-gerbers)")
+        if args.yaml:
+            print(f"\n[{phase_label}/4] Skipping Gerber export (--no-gerbers)")
+        else:
+            print(f"\n[{phase_label}/7] Skipping Gerber export (--no-gerbers)")
 
-    # --- Phase 6: Generate reference SVGs ---
-    print(f"\n[7/7] Generating reference maps...")
+    # --- Phase 7/4d: Generate reference SVGs ---
+    phase_label = "4d" if args.yaml else "7"
+    if args.yaml:
+        print(f"\n[{phase_label}/4] Generating reference maps...")
+    else:
+        print(f"\n[{phase_label}/7] Generating reference maps...")
     for p in panels:
         svg_path = args.output / f"panel_{p.index + 1}_map.svg"
         generate_reference_svg(p, svg_path, args.frame_width, args.spacing)
