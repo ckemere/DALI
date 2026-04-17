@@ -23,11 +23,11 @@ WORKFLOW 2: YAML Configuration with Custom Layout
   5. Build panels, export Gerbers, generate reference maps
 
 Usage:
-  # Automatic packing from Canvas zips
+  # Automatic packing from Canvas zips (generates JSON specifications)
   python panelize_pcbs.py /path/to/canvas/zips/ -o /path/to/output/
 
-  # Using YAML configuration to customize layout
-  python panelize_pcbs.py /path/to/canvas/zips/ --yaml panel_layout.yaml -o /path/to/output/
+  # Using JSON configuration to customize layout
+  python panelize_pcbs.py /path/to/canvas/zips/ --json panel_0.json -o /path/to/output/
 
   Run with KiCad's Python interpreter (or a venv with --system-site-packages):
     macOS:  /Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
@@ -36,32 +36,34 @@ Usage:
 Requirements:
   - KiCad 8+
   - KiKit: pip install kikit
-  - PyYAML: pip install pyyaml
 
-YAML Format Example:
-  panels:
-    - index: 0
-      width_mm: 254.0
-      height_mm: 304.8
-      subpanels:
-        - name: "row_1"
-          pcbs:
-            - netid: "hz108"
-              rotation: 0
-            - netid: "hz109"
-              rotation: 90
-        - name: "row_2"
-          pcbs:
-            - netid: "hz110"
-            - netid: "hz111"
-              rotation: 90
-    - index: 1
-      width_mm: 254.0
-      height_mm: 304.8
-      subpanels:
-        - name: "row_1"
-          pcbs:
-            - netid: "hz112"
+JSON Format Example (panel_0.json):
+  {
+    "width_mm": 254.0,
+    "height_mm": 304.8,
+    "rows": [
+      [
+        {"netid": "hz111"},
+        {
+          "subpanel": {
+            "rows": [
+              [
+                {"netid": "hz108", "rotation": 0},
+                {"netid": "hz109"}
+              ],
+              [
+                {"netid": "hz110"}
+              ]
+            ]
+          }
+        },
+        {"netid": "hz112", "rotation": 90}
+      ],
+      [
+        {"netid": "hz113"}
+      ]
+    ]
+  }
 """
 
 import os
@@ -72,7 +74,7 @@ import shutil
 import zipfile
 import argparse
 import subprocess
-import yaml
+import json
 from pathlib import Path
 from collections import defaultdict
 from dataclasses import dataclass, field, asdict
@@ -135,24 +137,11 @@ class Panel:
     height_mm: float = 0.0
 
 @dataclass
-class PCBSpec:
-    """PCB specification from YAML: netid with optional rotation."""
-    netid: str
-    rotation: int = 0  # degrees: 0, 90, 180, 270
-
-@dataclass
-class SubPanel:
-    """A logical grouping of PCBs (usually a row/shelf)."""
-    name: str
-    pcbs: list[PCBSpec] = field(default_factory=list)
-
-@dataclass
 class PanelSpec:
-    """Panel specification from YAML: layout blueprint."""
-    index: int
+    """Panel specification from JSON: layout blueprint."""
     width_mm: float
     height_mm: float
-    subpanels: list[SubPanel] = field(default_factory=list)
+    rows: list = field(default_factory=list)  # Each row is a list of PCB/SubPanel items
 
 
 # ===========================================================================
@@ -469,145 +458,132 @@ def bin_pack_panels(
 
 
 # ===========================================================================
-# 3.5 YAML Configuration I/O
+# 3.5 JSON Configuration I/O
 # ===========================================================================
 
-def generate_panel_yaml(panels: list[Panel], output_path: Path):
+def generate_panel_json(panels: list[Panel], output_dir: Path):
     """
-    Generate a YAML file from computed panels, organizing placements by rows
-    (shelves) as subPanels. This shows the current layout blueprint.
+    Generate JSON files for each panel, organizing placements into rows.
+    Returns list of (panel_index, PanelSpec).
     """
     panel_specs = []
+
     for p in panels:
-        # Group placements by y-coordinate (same shelf/row) with tolerance
-        rows: dict[int, list] = {}
-        tolerance_mm = 1.0
+        # Group placements by y-coordinate (same shelf/row)
+        rows_dict: dict[float, list] = {}
+        tolerance_mm = 2.0
 
         for pl in sorted(p.placements, key=lambda x: (x.y_mm, x.x_mm)):
             # Find which row this placement belongs to
             row_key = None
-            for existing_y in rows:
+            for existing_y in rows_dict:
                 if abs(pl.y_mm - existing_y) < tolerance_mm:
                     row_key = existing_y
                     break
 
             if row_key is None:
-                row_key = int(pl.y_mm * 10) // 10  # Round to nearest 0.1mm
+                row_key = pl.y_mm
 
-            if row_key not in rows:
-                rows[row_key] = []
-            rows[row_key].append(pl)
+            if row_key not in rows_dict:
+                rows_dict[row_key] = []
+            rows_dict[row_key].append(pl)
 
-        # Create subPanels from rows
-        subpanels = []
-        for row_idx, (y_key, placements) in enumerate(sorted(rows.items())):
-            pcbs = [
-                PCBSpec(netid=pl.board.net_id, rotation=90 if pl.rotated else 0)
-                for pl in placements
+        # Convert rows to JSON-serializable format
+        rows = []
+        for y_key in sorted(rows_dict.keys()):
+            row_items = [
+                {
+                    "netid": pl.board.net_id,
+                    "rotation": 90 if pl.rotated else 0
+                }
+                for pl in rows_dict[y_key]
             ]
-            subpanels.append(SubPanel(
-                name=f"row_{row_idx + 1}",
-                pcbs=pcbs,
-            ))
+            rows.append(row_items)
 
-        panel_specs.append(PanelSpec(
-            index=p.index,
+        panel_spec = PanelSpec(
             width_mm=p.width_mm,
             height_mm=p.height_mm,
-            subpanels=subpanels,
-        ))
+            rows=rows,
+        )
+        panel_specs.append((p.index, panel_spec))
 
-    # Convert to dict for YAML serialization
-    data = {
-        'panels': [
-            {
-                'index': ps.index,
-                'width_mm': round(ps.width_mm, 1),
-                'height_mm': round(ps.height_mm, 1),
-                'subpanels': [
-                    {
-                        'name': sp.name,
-                        'pcbs': [
-                            {'netid': pc.netid, 'rotation': pc.rotation}
-                            for pc in sp.pcbs
-                        ],
-                    }
-                    for sp in ps.subpanels
-                ],
-            }
-            for ps in panel_specs
-        ]
-    }
+        # Write JSON file for this panel
+        json_data = {
+            "width_mm": round(p.width_mm, 1),
+            "height_mm": round(p.height_mm, 1),
+            "rows": rows,
+        }
 
-    with open(output_path, 'w') as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        json_path = output_dir / f"panel_{p.index + 1}.json"
+        with open(json_path, 'w') as f:
+            json.dump(json_data, f, indent=2)
 
-    print(f"  Generated YAML panel specification: {output_path}")
+        print(f"  Generated JSON panel specification: {json_path}")
+
     return panel_specs
 
 
-def load_panel_yaml(yaml_path: Path) -> tuple[list[PanelSpec], dict[str, int]]:
+def load_panel_json(json_path: Path) -> tuple[PanelSpec, dict[str, int]]:
     """
-    Load panel specifications from YAML file.
-    Returns (panel_specs, netid_to_rotation_map) where rotation is in degrees.
+    Load panel specification from JSON file.
+    Returns (panel_spec, netid_to_rotation_map) where rotation is in degrees.
+    Also extracts netids from nested subpanels.
     """
-    with open(yaml_path, 'r') as f:
-        data = yaml.safe_load(f)
+    with open(json_path, 'r') as f:
+        data = json.load(f)
 
-    panel_specs = []
     netid_rotation = {}
 
-    for panel_data in data.get('panels', []):
-        subpanels = []
-        for sp_data in panel_data.get('subpanels', []):
-            pcbs = [
-                PCBSpec(
-                    netid=pc['netid'],
-                    rotation=pc.get('rotation', 0),
-                )
-                for pc in sp_data.get('pcbs', [])
-            ]
-            subpanels.append(SubPanel(name=sp_data['name'], pcbs=pcbs))
+    def extract_netids_from_rows(rows):
+        """Recursively extract netids and rotations from rows."""
+        for row in rows:
+            for item in row:
+                if "netid" in item:
+                    netid_rotation[item["netid"]] = item.get("rotation", 0)
+                elif "subpanel" in item:
+                    subpanel = item["subpanel"]
+                    extract_netids_from_rows(subpanel.get("rows", []))
 
-            # Track rotations by netid
-            for pcb in pcbs:
-                netid_rotation[pcb.netid] = pcb.rotation
+    extract_netids_from_rows(data.get("rows", []))
 
-        panel_specs.append(PanelSpec(
-            index=panel_data['index'],
-            width_mm=panel_data['width_mm'],
-            height_mm=panel_data['height_mm'],
-            subpanels=subpanels,
-        ))
+    panel_spec = PanelSpec(
+        width_mm=data["width_mm"],
+        height_mm=data["height_mm"],
+        rows=data.get("rows", []),
+    )
 
-    return panel_specs, netid_rotation
+    return panel_spec, netid_rotation
 
 
-def apply_yaml_layout(boards: dict[str, StudentBoard], panel_specs: list[PanelSpec],
+def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[int, PanelSpec]],
                       frame_w: float, spacing: float) -> list[Panel]:
     """
-    Reconstruct Panel objects from YAML specifications using actual board dimensions.
-    Respects rotation and netid specifications from YAML.
+    Reconstruct Panel objects from JSON specifications using actual board dimensions.
+    Respects rotation and netid specifications from JSON.
+    Handles nested subpanels recursively.
     """
     panels = []
 
-    for pspec in panel_specs:
-        panel = Panel(index=pspec.index, width_mm=pspec.width_mm, height_mm=pspec.height_mm)
-        current_y = frame_w + spacing
+    def place_items_in_row(items, current_x, current_y, spacing, boards):
+        """
+        Place a row of items (PCBs or subpanels), return list of placements and shelf height.
+        """
+        placements = []
+        shelf_h = 0.0
+        x = current_x
 
-        for subpanel in pspec.subpanels:
-            shelf_h = 0.0
-            current_x = frame_w + spacing
+        for item in items:
+            if "netid" in item:
+                # It's a PCB
+                netid = item["netid"]
+                rotation = item.get("rotation", 0)
 
-            # First pass: place boards and compute shelf height
-            subpanel_placements = []
-            for pcb_spec in subpanel.pcbs:
-                if pcb_spec.netid not in boards:
-                    print(f"  WARNING: netid {pcb_spec.netid} not found, skipping")
+                if netid not in boards:
+                    print(f"  WARNING: netid {netid} not found, skipping")
                     continue
 
-                board = boards[pcb_spec.netid]
-                rotated = (pcb_spec.rotation % 180) == 90
+                board = boards[netid]
+                rotated = (rotation % 180) == 90
 
                 # Dimensions considering rotation
                 w = board.height_mm if rotated else board.width_mm
@@ -615,10 +591,10 @@ def apply_yaml_layout(boards: dict[str, StudentBoard], panel_specs: list[PanelSp
                 w_with_space = w + 2 * spacing
                 h_with_space = h + 2 * spacing
 
-                cx = current_x + w_with_space / 2
+                cx = x + w_with_space / 2
                 cy = current_y + h_with_space / 2
 
-                subpanel_placements.append({
+                placements.append({
                     'board': board,
                     'x': cx,
                     'y': cy,
@@ -626,21 +602,53 @@ def apply_yaml_layout(boards: dict[str, StudentBoard], panel_specs: list[PanelSp
                     'h_with_space': h_with_space,
                 })
 
-                current_x += w_with_space
+                x += w_with_space
                 shelf_h = max(shelf_h, h_with_space)
 
-            # Add placements to panel
-            for pl_data in subpanel_placements:
-                # Adjust y to account for final shelf height
-                pl_data['y'] = current_y + shelf_h / 2
-                panel.placements.append(Placement(
-                    board=pl_data['board'],
-                    x_mm=pl_data['x'],
-                    y_mm=pl_data['y'],
-                    rotated=pl_data['rotated'],
-                ))
+            elif "subpanel" in item:
+                # It's a subpanel - recursively place its rows
+                subpanel = item["subpanel"]
+                sub_rows = subpanel.get("rows", [])
 
-            current_y += shelf_h
+                # Place subpanel starting at current position
+                sub_current_y = current_y
+                sub_placements = []
+                sub_width = 0.0
+                sub_height = 0.0
+
+                for sub_row in sub_rows:
+                    row_placements, row_h = place_items_in_row(
+                        sub_row, x, sub_current_y, spacing, boards
+                    )
+                    sub_placements.extend(row_placements)
+                    sub_current_y += row_h
+                    sub_height += row_h
+
+                    # Track the maximum width of subpanel
+                    if row_placements:
+                        row_width = max(p['x'] for p in row_placements) + spacing
+                        sub_width = max(sub_width, row_width - x)
+
+                placements.extend(sub_placements)
+                x += sub_width
+                shelf_h = max(shelf_h, sub_height)
+
+        # Adjust y coordinates to center in shelf
+        for pl in placements:
+            pl['y'] = current_y + shelf_h / 2
+
+        return placements, shelf_h
+
+    for panel_idx, pspec in panel_specs:
+        panel = Panel(index=panel_idx, width_mm=pspec.width_mm, height_mm=pspec.height_mm)
+        current_y = frame_w + spacing
+
+        for row in pspec.rows:
+            row_placements, row_h = place_items_in_row(
+                row, frame_w + spacing, current_y, spacing, boards
+            )
+            panel.placements.extend(row_placements)
+            current_y += row_h
 
         panels.append(panel)
 
@@ -1077,11 +1085,11 @@ def main():
         description="Panelize a class set of KiCad PCB submissions from Canvas."
     )
     parser.add_argument("zip_dir", type=Path, nargs='?',
-                        help="Directory containing Canvas submission zip files (optional if --yaml is provided)")
+                        help="Directory containing Canvas submission zip files (optional if --json is provided)")
     parser.add_argument("-o", "--output", type=Path, default=Path("./panel_output"),
                         help="Output directory (default: ./panel_output)")
-    parser.add_argument("--yaml", type=Path,
-                        help="YAML file specifying panel layout (overrides automatic packing)")
+    parser.add_argument("--json", type=Path,
+                        help="JSON file specifying panel layout (overrides automatic packing)")
     parser.add_argument("--panel-width", type=float, default=254.0,
                         help="Max panel width in mm (default: 254 = 10in)")
     parser.add_argument("--panel-height", type=float, default=304.8,
@@ -1104,12 +1112,10 @@ def main():
                              "improve horizontal packing (default: 0.10 = 10%%)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for layout engine (default: 42)")
-    parser.add_argument("--generate-yaml", action="store_true",
-                        help="Generate YAML specification file from computed layout (default: always on)")
     args = parser.parse_args()
 
-    if not args.yaml and not args.zip_dir:
-        parser.error("Either zip_dir or --yaml must be provided")
+    if not args.json and not args.zip_dir:
+        parser.error("Either zip_dir or --json must be provided")
 
     random.seed(args.seed)
 
@@ -1125,17 +1131,20 @@ def main():
     # --- Phase 1 & 2: Parse & extract (pure Python) ---
     boards = []
     boards_by_netid = {}
+    json_dir = args.output / "json"
+    json_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.yaml:
-        # Load from YAML - still need to extract PCBs if using Canvas zips
-        print(f"\n[1/2] Loading panel specification from {args.yaml}")
-        panel_specs, netid_rotation = load_panel_yaml(args.yaml)
+    if args.json:
+        # Load from JSON - still need to extract PCBs if using Canvas zips
+        print(f"\n[1/4] Loading panel specification from {args.json}")
+        panel_spec, netid_rotation = load_panel_json(args.json)
+        panel_specs = [(0, panel_spec)]  # Convert to list format for apply_json_layout
 
         if args.zip_dir:
-            print(f"\n[2a/4] Parsing submissions from {args.zip_dir}")
+            print(f"\n[2/4] Parsing submissions from {args.zip_dir}")
             boards = parse_submissions(args.zip_dir)
 
-            print(f"[2b/4] Extracting latest submissions to {work_dir}")
+            print(f"[2/4] Extracting latest submissions to {work_dir}")
             boards = extract_submissions(boards, work_dir)
 
             if not boards:
@@ -1143,7 +1152,7 @@ def main():
 
             boards_by_netid = {b.net_id: b for b in boards}
         else:
-            sys.exit("ERROR: YAML mode requires --yaml to specify panel layout")
+            sys.exit("ERROR: JSON mode requires Canvas zips to extract PCBs")
 
         print(f"\n[3/4] Reading board dimensions...")
         boards = read_bounding_boxes(boards)
@@ -1154,9 +1163,9 @@ def main():
         # Update boards_by_netid with dimension data
         boards_by_netid = {b.net_id: b for b in boards}
 
-        # Apply YAML layout specification
-        print(f"[4/4] Applying YAML panel layout...")
-        panels = apply_yaml_layout(boards_by_netid, panel_specs, args.frame_width, args.spacing)
+        # Apply JSON layout specification
+        print(f"[4/4] Applying JSON panel layout...")
+        panels = apply_json_layout(boards_by_netid, panel_specs, args.frame_width, args.spacing)
 
     else:
         # Original Canvas zip parsing workflow
@@ -1182,10 +1191,9 @@ def main():
                                  args.spacing, args.frame_width,
                                  gap_height_margin=args.gap_height_margin)
 
-        # Generate YAML from computed layout
-        print(f"\n[4b/7] Generating YAML panel specification...")
-        yaml_path = args.output / "panel_layout.yaml"
-        generate_panel_yaml(panels, yaml_path)
+        # Generate JSON from computed layout
+        print(f"\n[4b/7] Generating JSON panel specifications...")
+        generate_panel_json(panels, json_dir)
 
     for p in panels:
         print(f"\n  Panel {p.index + 1}: {len(p.placements)} boards")
