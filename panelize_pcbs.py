@@ -952,14 +952,15 @@ def main():
     pairs = precompute_pairs(boards, args.spacing)
     print(f"  Created {len(pairs)} pairs from {len(boards)} boards")
 
-    # Show top 5 pairs by compactness (lowest waste)
-    sorted_pairs = sorted(pairs, key=lambda p: p.waste)
+    # Show top 5 pairs by compactness (lowest waste in best arrangement)
+    sorted_pairs = sorted(pairs, key=lambda p: p.best_arrangement().waste)
     print(f"  Top 5 most compact pairs (by waste):")
     for pair in sorted_pairs[:5]:
-        a_rot = "rot" if pair.rot_a else "   "
-        b_rot = "rot" if pair.rot_b else "   "
+        arr = pair.best_arrangement()
+        a_rot = "rot" if arr.rot_a else "   "
+        b_rot = "rot" if arr.rot_b else "   "
         print(f"    {pair.board_a.net_id} ({a_rot}) + {pair.board_b.net_id} ({b_rot}) "
-              f"→ {pair.w:.1f}×{pair.h:.1f} mm (waste={pair.waste:.1f})")
+              f"→ {arr.w:.1f}×{arr.h:.1f} mm (waste={arr.waste:.1f})")
 
     # --- Phase 4: Bin pack ---
     print(f"\n[5/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
