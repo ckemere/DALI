@@ -197,10 +197,14 @@ def bin_pack_panels(
     frame_w: float,
 ) -> list[Panel]:
     """
-    Pack boards into panels using Shelf Next-Fit Decreasing Height.
+    Pack boards into panels using Shelf Next-Fit Decreasing Height with gap filling.
 
     Each board's footprint on the panel is its bbox + spacing on all sides.
     The usable area inside the panel is reduced by the frame width.
+
+    Before closing a shelf (to start a new shelf or panel), any remaining board
+    that fits in the leftover horizontal space — including when rotated 90° — is
+    placed there, reducing wasted area while preserving the row structure.
     """
     usable_w = panel_w - 2 * frame_w
     usable_h = panel_h - 2 * frame_w
@@ -268,37 +272,56 @@ def bin_pack_panels(
         shelf_h = item_h
         shelf_x = 0.0
 
-    for item in items:
-        # Does it fit on the current shelf?
-        if shelf_x + item.w <= usable_w and shelf_y + max(shelf_h, item.h) <= usable_h:
-            pass  # fits on current shelf
-        elif shelf_y + shelf_h + item.h <= usable_h:
-            # Start a new shelf on this panel
-            new_shelf(item.h)
-        else:
-            # Need a new panel
-            new_panel()
-            shelf_y = 0.0
-            shelf_h = 0.0
-            shelf_x = 0.0
-
-        # Update shelf height if this item is taller
-        if item.h > shelf_h:
-            shelf_h = item.h
-
-        # Place the board — coordinates are center of the board within the panel
-        # (frame_w offset + spacing + half board dimension)
-        cx = frame_w + shelf_x + item.w / 2
-        cy = frame_w + shelf_y + item.h / 2
-
+    def place(w, h, rotated, board):
+        nonlocal shelf_h, shelf_x
+        if h > shelf_h:
+            shelf_h = h
+        cx = frame_w + shelf_x + w / 2
+        cy = frame_w + shelf_y + h / 2
         current_panel.placements.append(Placement(
-            board=item.board,
-            x_mm=cx,
-            y_mm=cy,
-            rotated=item.rotated,
+            board=board, x_mm=cx, y_mm=cy, rotated=rotated,
         ))
+        shelf_x += w
 
-        shelf_x += item.w
+    def fill_gap(remaining):
+        """Fill remaining shelf space with any waiting board that fits, trying
+        both orientations. Candidates must not exceed the current shelf height
+        so the row structure is preserved."""
+        while True:
+            gap_w = usable_w - shelf_x
+            if gap_w <= 0:
+                break
+            found = None
+            for i, it in enumerate(remaining):
+                if it.w <= gap_w and it.h <= shelf_h:
+                    found = (i, it.w, it.h, it.rotated, it.board)
+                    break
+                if it.h <= gap_w and it.w <= shelf_h:  # try rotated
+                    found = (i, it.h, it.w, not it.rotated, it.board)
+                    break
+            if found is None:
+                break
+            i, fw, fh, frot, fboard = found
+            remaining.pop(i)
+            place(fw, fh, frot, fboard)
+
+    # Mutable working list; current item is popped before fill_gap so it is
+    # never a gap candidate for its own shelf-closing event.
+    remaining = list(items)
+
+    while remaining:
+        item = remaining.pop(0)
+
+        if shelf_x + item.w <= usable_w and shelf_y + max(shelf_h, item.h) <= usable_h:
+            place(item.w, item.h, item.rotated, item.board)
+        elif shelf_y + shelf_h + item.h <= usable_h:
+            fill_gap(remaining)
+            new_shelf(item.h)
+            place(item.w, item.h, item.rotated, item.board)
+        else:
+            fill_gap(remaining)
+            new_panel()
+            place(item.w, item.h, item.rotated, item.board)
 
     # Don't forget the last panel
     if current_panel.placements:
