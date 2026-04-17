@@ -464,17 +464,22 @@ def bin_pack_panels(
 def generate_panel_json(panels: list[Panel], output_dir: Path):
     """
     Generate JSON files for each panel, organizing placements into rows.
+    Groups boards by their approximate y-coordinate range (shelf height).
     Returns list of (panel_index, PanelSpec).
     """
     panel_specs = []
 
     for p in panels:
-        # Group placements by y-coordinate (same shelf/row)
-        rows_dict: dict[float, list] = {}
-        tolerance_mm = 2.0
+        # Group placements by y-coordinate ranges (shelves)
+        # Use a more generous tolerance since boards of different heights on the
+        # same shelf will have different y-centers
+        sorted_placements = sorted(p.placements, key=lambda x: (x.y_mm, x.x_mm))
 
-        for pl in sorted(p.placements, key=lambda x: (x.y_mm, x.x_mm)):
-            # Find which row this placement belongs to
+        rows_dict: dict[float, list] = {}
+        tolerance_mm = 20.0  # Increased to account for height differences on same shelf
+
+        for pl in sorted_placements:
+            # Find which row this placement belongs to by checking y-range
             row_key = None
             for existing_y in rows_dict:
                 if abs(pl.y_mm - existing_y) < tolerance_mm:
@@ -488,15 +493,17 @@ def generate_panel_json(panels: list[Panel], output_dir: Path):
                 rows_dict[row_key] = []
             rows_dict[row_key].append(pl)
 
-        # Convert rows to JSON-serializable format
+        # Convert rows to JSON-serializable format, preserving x-order within each row
         rows = []
         for y_key in sorted(rows_dict.keys()):
+            # Sort within row by x-coordinate (left to right)
+            row_placements = sorted(rows_dict[y_key], key=lambda pl: pl.x_mm)
             row_items = [
                 {
                     "netid": pl.board.net_id,
                     "rotation": 90 if pl.rotated else 0
                 }
-                for pl in rows_dict[y_key]
+                for pl in row_placements
             ]
             rows.append(row_items)
 
