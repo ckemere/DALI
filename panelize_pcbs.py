@@ -1202,8 +1202,8 @@ def main():
             print(f"    {pl.board.net_id}: at ({pl.x_mm:.1f}, {pl.y_mm:.1f}){rot_str}")
 
     # --- Phase 5/4b: Build panels (with rails, tabs, mouse bites) ---
-    phase_label = "4c" if args.yaml else "5"
-    if args.yaml:
+    phase_label = "4c" if args.json else "5"
+    if args.json:
         print(f"\n[{phase_label}/4] Building panel PCBs with tabs + mouse bites...")
     else:
         print(f"\n[{phase_label}/7] Building panel PCBs with tabs + mouse bites...")
@@ -1228,9 +1228,9 @@ def main():
             raise
 
     # --- Phase 6/4c: Export Gerbers ---
-    phase_label = "4c" if args.yaml else "6"
+    phase_label = "4c" if args.json else "6"
     if not args.no_gerbers:
-        if args.yaml:
+        if args.json:
             print(f"\n[{phase_label}/4] Exporting Gerbers...")
         else:
             print(f"\n[{phase_label}/7] Exporting Gerbers...")
@@ -1238,14 +1238,14 @@ def main():
         for p, path in panel_paths:
             export_gerbers(path, gerber_dir)
     else:
-        if args.yaml:
+        if args.json:
             print(f"\n[{phase_label}/4] Skipping Gerber export (--no-gerbers)")
         else:
             print(f"\n[{phase_label}/7] Skipping Gerber export (--no-gerbers)")
 
     # --- Phase 7/4d: Generate reference SVGs ---
-    phase_label = "4d" if args.yaml else "7"
-    if args.yaml:
+    phase_label = "4d" if args.json else "7"
+    if args.json:
         print(f"\n[{phase_label}/4] Generating reference maps...")
     else:
         print(f"\n[{phase_label}/7] Generating reference maps...")
