@@ -689,6 +689,19 @@ def apply_json_layout(boards: dict[str, StudentBoard], panel_specs: list[tuple[i
             else:
                 current_y += row_h
 
+        # Calculate actual panel dimensions from placements
+        if panel.placements:
+            max_x = max(
+                pl.x_mm + (pl.board.height_mm if pl.rotated else pl.board.width_mm) / 2
+                for pl in panel.placements
+            ) + frame_w
+            max_y = max(
+                pl.y_mm + (pl.board.width_mm if pl.rotated else pl.board.height_mm) / 2
+                for pl in panel.placements
+            ) + frame_w
+            panel.width_mm = max_x
+            panel.height_mm = max_y
+
         panels.append(panel)
 
     return panels
