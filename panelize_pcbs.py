@@ -85,6 +85,17 @@ class Placement:
     rotated: bool = False   # True if rotated 90°
 
 @dataclass
+class PairInfo:
+    """A precomputed pair of PCBs in their most compact orientation."""
+    board_a: StudentBoard
+    board_b: StudentBoard
+    w: float        # width of most compact arrangement
+    h: float        # height of most compact arrangement
+    waste: float    # wasted area (total bounding box area - sum of PCB areas)
+    rot_a: bool     # True if board_a is rotated in the most compact arrangement
+    rot_b: bool     # True if board_b is rotated in the most compact arrangement
+
+@dataclass
 class Panel:
     """One fabrication panel."""
     index: int
@@ -185,40 +196,134 @@ def read_bounding_boxes(boards: list[StudentBoard]) -> list[StudentBoard]:
 
 
 # ===========================================================================
-# 3. Bin packing (shelf-based with rotation)
+# 3. Pair precomputation
+# ===========================================================================
+
+def precompute_pairs(boards: list[StudentBoard], spacing: float) -> list[PairInfo]:
+    """
+    Precompute all pairwise boards in their most compact arrangement.
+    For each pair, try 8 configurations (stack vertical/horizontal × rotations)
+    and keep the one with minimum wasted area.
+    """
+    pairs = []
+
+    for i in range(len(boards)):
+        for j in range(i + 1, len(boards)):
+            a, b = boards[i], boards[j]
+
+            # Compute each board's area (used to calculate waste)
+            area_a = a.width_mm * a.height_mm
+            area_b = b.width_mm * b.height_mm
+            total_area = area_a + area_b
+
+            best_waste = float('inf')
+            best_w, best_h = 0, 0
+            best_rot_a, best_rot_b = False, False
+
+            # Try all 8 configurations: 4 rotation combos × 2 stack orientations
+            # Each config is (a_w, a_h, b_w, b_h, rot_a, rot_b, stack_vertical)
+            configs = [
+                (a.width_mm, a.height_mm, b.width_mm, b.height_mm, False, False, True),   # both normal, v stack
+                (a.width_mm, a.height_mm, b.width_mm, b.height_mm, False, False, False),  # both normal, h stack
+                (a.width_mm, a.height_mm, b.height_mm, b.width_mm, False, True, True),    # a normal, b rotated, v stack
+                (a.width_mm, a.height_mm, b.height_mm, b.width_mm, False, True, False),   # a normal, b rotated, h stack
+                (a.height_mm, a.width_mm, b.width_mm, b.height_mm, True, False, True),    # a rotated, b normal, v stack
+                (a.height_mm, a.width_mm, b.width_mm, b.height_mm, True, False, False),   # a rotated, b normal, h stack
+                (a.height_mm, a.width_mm, b.height_mm, b.width_mm, True, True, True),     # both rotated, v stack
+                (a.height_mm, a.width_mm, b.height_mm, b.width_mm, True, True, False),    # both rotated, h stack
+            ]
+
+            for a_w, a_h, b_w, b_h, rot_a, rot_b, stack_vertical in configs:
+                if stack_vertical:
+                    # Stack vertically (A above B)
+                    w = max(a_w, b_w)
+                    h = a_h + b_h
+                else:
+                    # Stack horizontally (A left of B)
+                    w = a_w + b_w
+                    h = max(a_h, b_h)
+
+                bbox_area = w * h
+                waste = bbox_area - total_area
+
+                if waste < best_waste:
+                    best_waste = waste
+                    best_w, best_h = w, h
+                    best_rot_a, best_rot_b = rot_a, rot_b
+
+            pairs.append(PairInfo(
+                board_a=a,
+                board_b=b,
+                w=best_w,
+                h=best_h,
+                waste=best_waste,
+                rot_a=best_rot_a,
+                rot_b=best_rot_b,
+            ))
+
+    return pairs
+
+
+# ===========================================================================
+# 4. Bin packing (shelf-based with rotation)
 # ===========================================================================
 
 def bin_pack_panels(
     boards: list[StudentBoard],
+    pairs: list[PairInfo],
     panel_w: float,
     panel_h: float,
     spacing: float,
     frame_w: float,
 ) -> list[Panel]:
     """
-    Pack boards into panels using Shelf Next-Fit Decreasing Height.
-
-    Each board's footprint on the panel is its bbox + spacing on all sides.
-    The usable area inside the panel is reduced by the frame width.
+    Pack boards and pairs into panels using Shelf Next-Fit Decreasing Height.
+    Respects matching constraint: no board can appear in multiple placed pairs.
     """
     usable_w = panel_w - 2 * frame_w
     usable_h = panel_h - 2 * frame_w
 
-    # For each board, compute the space it needs (bbox + spacing on each side)
     @dataclass
     class PackItem:
-        board: StudentBoard
-        w: float        # width including spacing
-        h: float        # height including spacing
+        board: Optional[StudentBoard] = None  # Single board, or None if pair
+        pair: Optional[PairInfo] = None       # Pair, or None if single
+        w: float = 0.0                        # width including spacing
+        h: float = 0.0                        # height including spacing
         rotated: bool = False
 
     items = []
+    board_in_pair = set()  # Track which boards are in pairs
+
+    # Create pair items
+    for pair in pairs:
+        pair_w = pair.w + 2 * spacing
+        pair_h = pair.h + 2 * spacing
+
+        # Try both orientations
+        fits_normal = (pair_w <= usable_w and pair_h <= usable_h)
+        fits_rotated = (pair_h <= usable_w and pair_w <= usable_h)
+
+        if not fits_normal and not fits_rotated:
+            continue  # Skip pairs that don't fit in any orientation
+
+        # Prefer orientation where width <= usable_w
+        if fits_normal:
+            items.append(PackItem(pair=pair, w=pair_w, h=pair_h, rotated=False))
+        else:
+            items.append(PackItem(pair=pair, w=pair_h, h=pair_w, rotated=True))
+
+        board_in_pair.add(pair.board_a)
+        board_in_pair.add(pair.board_b)
+
+    # Create single board items (excluding those in pairs)
     oversized = []
     for b in boards:
+        if b in board_in_pair:
+            continue
+
         w = b.width_mm + 2 * spacing
         h = b.height_mm + 2 * spacing
 
-        # Try both orientations, see if it fits at all
         fits_normal = (w <= usable_w and h <= usable_h)
         fits_rotated = (h <= usable_w and w <= usable_h)
 
@@ -226,7 +331,6 @@ def bin_pack_panels(
             oversized.append(b)
             continue
 
-        # Prefer orientation where width <= usable_w (better shelf packing)
         if fits_normal:
             items.append(PackItem(board=b, w=w, h=h, rotated=False))
         else:
@@ -240,19 +344,29 @@ def bin_pack_panels(
     # Sort by height descending (classic shelf heuristic)
     items.sort(key=lambda it: it.h, reverse=True)
 
+    # Determine starting shelf height
+    max_single_h = max((it.h for it in items if it.board is not None), default=0)
+    min_pair_h = min((min(it.w, it.h) for it in items if it.pair is not None), default=float('inf'))
+
+    if min_pair_h > max_single_h:
+        shelf_start_h = min_pair_h
+    else:
+        shelf_start_h = max_single_h
+
     panels: list[Panel] = []
     current_panel = Panel(index=0)
-    shelf_y = 0.0       # top of current shelf (y offset within usable area)
-    shelf_h = 0.0       # height of current shelf
-    shelf_x = 0.0       # current x position on shelf
+    used_boards = set()  # Track boards used in placed pairs
+    shelf_y = 0.0
+    shelf_h = shelf_start_h if shelf_start_h > 0 else 0
+    shelf_x = 0.0
 
     def new_panel():
-        nonlocal current_panel, shelf_y, shelf_h, shelf_x
+        nonlocal current_panel, shelf_y, shelf_h, shelf_x, used_boards
         if current_panel.placements:
             panels.append(current_panel)
         current_panel = Panel(index=len(panels))
         shelf_y = 0.0
-        shelf_h = 0.0
+        shelf_h = shelf_start_h if shelf_start_h > 0 else 0
         shelf_x = 0.0
 
     def new_shelf(item_h):
@@ -262,34 +376,53 @@ def bin_pack_panels(
         shelf_x = 0.0
 
     for item in items:
-        # Does it fit on the current shelf?
+        # Skip if this item contains a board that's already in a placed pair
+        if item.pair and (item.pair.board_a in used_boards or item.pair.board_b in used_boards):
+            continue
+
+        # Try to place item on current shelf or create new shelf/panel
         if shelf_x + item.w <= usable_w and shelf_y + max(shelf_h, item.h) <= usable_h:
             pass  # fits on current shelf
         elif shelf_y + shelf_h + item.h <= usable_h:
-            # Start a new shelf on this panel
             new_shelf(item.h)
         else:
-            # Need a new panel
             new_panel()
-            shelf_y = 0.0
-            shelf_h = 0.0
-            shelf_x = 0.0
 
-        # Update shelf height if this item is taller
+        # Update shelf height if item is taller
         if item.h > shelf_h:
             shelf_h = item.h
 
-        # Place the board — coordinates are center of the board within the panel
-        # (frame_w offset + spacing + half board dimension)
-        cx = frame_w + shelf_x + item.w / 2
-        cy = frame_w + shelf_y + item.h / 2
-
-        current_panel.placements.append(Placement(
-            board=item.board,
-            x_mm=cx,
-            y_mm=cy,
-            rotated=item.rotated,
-        ))
+        # Place item
+        if item.pair:
+            # For pairs, place both boards at the same location (they're stacked)
+            # Board rotations: if pair is flipped in shelf (rotated=True), toggle both rotations
+            cx = frame_w + shelf_x + item.w / 2
+            cy = frame_w + shelf_y + item.h / 2
+            rot_a = item.pair.rot_a ^ item.rotated  # XOR: rotate pair flips each board's rotation
+            rot_b = item.pair.rot_b ^ item.rotated
+            current_panel.placements.append(Placement(
+                board=item.pair.board_a,
+                x_mm=cx,
+                y_mm=cy,
+                rotated=rot_a,
+            ))
+            current_panel.placements.append(Placement(
+                board=item.pair.board_b,
+                x_mm=cx,
+                y_mm=cy,
+                rotated=rot_b,
+            ))
+            used_boards.add(item.pair.board_a)
+            used_boards.add(item.pair.board_b)
+        else:
+            cx = frame_w + shelf_x + item.w / 2
+            cy = frame_w + shelf_y + item.h / 2
+            current_panel.placements.append(Placement(
+                board=item.board,
+                x_mm=cx,
+                y_mm=cy,
+                rotated=item.rotated,
+            ))
 
         shelf_x += item.w
 
@@ -785,9 +918,14 @@ def main():
     if not boards:
         sys.exit("ERROR: No valid boards after reading dimensions!")
 
-    # --- Phase 3: Bin pack ---
-    print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
-    panels = bin_pack_panels(boards, args.panel_width, args.panel_height,
+    # --- Phase 3: Precompute pairs ---
+    print(f"\n[4/7] Precomputing pairwise arrangements...")
+    pairs = precompute_pairs(boards, args.spacing)
+    print(f"  Created {len(pairs)} pairs from {len(boards)} boards")
+
+    # --- Phase 4: Bin pack ---
+    print(f"\n[5/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
+    panels = bin_pack_panels(boards, pairs, args.panel_width, args.panel_height,
                              args.spacing, args.frame_width)
 
     for p in panels:
@@ -796,8 +934,8 @@ def main():
             rot_str = " (rotated)" if pl.rotated else ""
             print(f"    {pl.board.net_id}: at ({pl.x_mm:.1f}, {pl.y_mm:.1f}){rot_str}")
 
-    # --- Phase 4: Build panels (with rails, tabs, mouse bites) ---
-    print(f"\n[5/7] Building panel PCBs with tabs + mouse bites...")
+    # --- Phase 5: Build panels (with rails, tabs, mouse bites) ---
+    print(f"\n[6/7] Building panel PCBs with tabs + mouse bites...")
     panel_dir = args.output / "panels"
     panel_dir.mkdir(parents=True, exist_ok=True)
 
@@ -817,17 +955,17 @@ def main():
             print(f"  You may need to adjust the KiKit API calls for your version.")
             raise
 
-    # --- Phase 5: Export Gerbers ---
+    # --- Phase 6: Export Gerbers ---
     if not args.no_gerbers:
-        print(f"\n[6/7] Exporting Gerbers...")
+        print(f"\n[7/7] Exporting Gerbers...")
         gerber_dir = args.output / "gerbers"
         for p, path in panel_paths:
             export_gerbers(path, gerber_dir)
     else:
-        print(f"\n[6/7] Skipping Gerber export (--no-gerbers)")
+        print(f"\n[7/7] Skipping Gerber export (--no-gerbers)")
 
-    # --- Phase 6: Generate reference SVGs ---
-    print(f"\n[7/7] Generating reference maps...")
+    # --- Phase 7: Generate reference SVGs ---
+    print(f"\n[8/8] Generating reference maps...")
     for p in panels:
         svg_path = args.output / f"panel_{p.index + 1}_map.svg"
         generate_reference_svg(p, svg_path, args.frame_width, args.spacing)
