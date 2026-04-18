@@ -236,6 +236,89 @@ def read_bounding_boxes(boards: list[StudentBoard]) -> list[StudentBoard]:
 # 3. Bin packing (shelf-based with rotation)
 # ===========================================================================
 
+def try_all_packing_algorithms(
+    boards: list[StudentBoard],
+    panel_w: float,
+    panel_h: float,
+    spacing: float,
+    frame_w: float,
+) -> tuple[list[Panel], str, float]:
+    """
+    Try all 18 Guillotine variants with multiple board orderings.
+    Returns the best result.
+    """
+    try:
+        import rectpack
+    except ImportError:
+        sys.exit("ERROR: rectpack is required. Install with: pip install rectpack")
+
+    # All 18 Guillotine algorithm variants
+    algorithms = [
+        "GuillotineBssfSas", "GuillotineBssfLas", "GuillotineBssfSlas",
+        "GuillotineBssfLlas", "GuillotineBssfMaxas", "GuillotineBssfMinas",
+        "GuillotineBlsfSas", "GuillotineBlsfLas", "GuillotineBlsfSlas",
+        "GuillotineBlsfLlas", "GuillotineBlsfMaxas", "GuillotineBlsfMinas",
+        "GuillotineBafSas", "GuillotineBafLas", "GuillotineBafSlas",
+        "GuillotineBafLlas", "GuillotineBafMaxas", "GuillotineBafMinas",
+    ]
+
+    # Generate different board orderings
+    orderings = [
+        ("original", boards),
+        ("by_area_desc", sorted(boards, key=lambda b: b.width_mm * b.height_mm, reverse=True)),
+        ("by_perimeter_desc", sorted(boards, key=lambda b: 2*(b.width_mm + b.height_mm), reverse=True)),
+        ("by_width_desc", sorted(boards, key=lambda b: b.width_mm, reverse=True)),
+        ("by_height_desc", sorted(boards, key=lambda b: b.height_mm, reverse=True)),
+    ]
+
+    # Add a few random orderings
+    for i in range(3):
+        shuffled = list(boards)
+        random.shuffle(shuffled)
+        orderings.append((f"random_{i}", shuffled))
+
+    best_panels = None
+    best_algo = None
+    best_efficiency = 0.0
+    best_ordering = None
+
+    total_board_area = sum(b.width_mm * b.height_mm for b in boards)
+
+    print(f"\n  Trying {len(algorithms)} algorithms × {len(orderings)} orderings...")
+    tried = 0
+
+    for algo in algorithms:
+        for order_name, ordered_boards in orderings:
+            tried += 1
+            try:
+                panels, _ = pack_panels_with_rectpack(
+                    ordered_boards, panel_w, panel_h, spacing, frame_w, algorithm=algo
+                )
+
+                # Calculate efficiency
+                if panels:
+                    total_panel_area = sum(p.width_mm * p.height_mm for p in panels)
+                    efficiency = total_board_area / total_panel_area if total_panel_area > 0 else 0
+
+                    if efficiency > best_efficiency:
+                        best_efficiency = efficiency
+                        best_panels = panels
+                        best_algo = algo
+                        best_ordering = order_name
+                        print(f"    New best: {efficiency*100:.1f}% with {algo} ({order_name})")
+            except Exception:
+                pass  # Skip failures silently
+
+    if best_panels is None:
+        sys.exit("ERROR: All packing attempts failed!")
+
+    print(f"\n  Best result: {best_efficiency*100:.1f}% efficiency")
+    print(f"    Algorithm: {best_algo}")
+    print(f"    Board ordering: {best_ordering}")
+
+    return best_panels, best_algo, best_efficiency
+
+
 def pack_panels_with_rectpack(
     boards: list[StudentBoard],
     panel_w: float,
@@ -243,7 +326,7 @@ def pack_panels_with_rectpack(
     spacing: float,
     frame_w: float,
     algorithm: str = "GuillotineBssfMaxas",
-) -> list[Panel]:
+) -> tuple[list[Panel], str]:
     """
     Pack boards into panels using the rectpack library with a Guillotine algorithm.
 
@@ -262,7 +345,7 @@ def pack_panels_with_rectpack(
         algorithm: Name of rectpack algorithm to use (any Guillotine variant)
 
     Returns:
-        List of Panel objects with placements.
+        Tuple of (panels, algorithm_name_used)
     """
     try:
         import rectpack
@@ -376,7 +459,7 @@ def pack_panels_with_rectpack(
         p.width_mm = max_x
         p.height_mm = max_y
 
-    return panels
+    return panels, algorithm
 
 
 # ===========================================================================
@@ -1082,6 +1165,9 @@ def main():
                              "GuillotineBssfMaxas (default, tight packing), "
                              "GuillotineBlsfMaxas (alternative tight), "
                              "GuillotineBafSas (fastest). See rectpack docs.")
+    parser.add_argument("--try-all-algos", action="store_true",
+                        help="Try all 18 Guillotine variants with multiple board orderings "
+                             "and pick the best result (slower but better packing)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for layout engine (default: 42)")
     args = parser.parse_args()
@@ -1158,12 +1244,20 @@ def main():
             sys.exit("ERROR: No valid boards after reading dimensions!")
 
         # --- Phase 3: Bin pack with rectpack ---
-        print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm) using {args.packing_algo}...")
-        panels = pack_panels_with_rectpack(
-            boards, args.panel_width, args.panel_height,
-            args.spacing, args.frame_width,
-            algorithm=args.packing_algo,
-        )
+        if args.try_all_algos:
+            print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
+            panels, algo_used, efficiency = try_all_packing_algorithms(
+                boards, args.panel_width, args.panel_height,
+                args.spacing, args.frame_width,
+            )
+            print(f"  Used algorithm: {algo_used}")
+        else:
+            print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm) using {args.packing_algo}...")
+            panels, algo_used = pack_panels_with_rectpack(
+                boards, args.panel_width, args.panel_height,
+                args.spacing, args.frame_width,
+                algorithm=args.packing_algo,
+            )
 
         # Generate JSON from computed layout
         print(f"\n[4b/7] Generating JSON panel specifications...")
