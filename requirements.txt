@@ -10,5 +10,3 @@ python-cas
 google-genai
 opencv-python
 numpy
-kikit>=1.7.0
-rectpack>=0.2.0

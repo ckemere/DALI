@@ -1,0 +1,13 @@
+# PCB Panelization Tool Requirements
+# Install with: pip install -r requirements-pcb.txt
+#
+# Note: This should be installed in a virtual environment using KiCad's Python
+# to ensure pcbnew bindings are available.
+#
+# Example setup:
+#   PYTHON=/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
+#   ${PYTHON} -m venv --system-site-packages venv-ki
+#   ./venv-ki/bin/pip3 install -r requirements-pcb.txt
+
+kikit>=1.7.0
+rectpack>=0.2.0

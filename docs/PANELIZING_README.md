@@ -16,21 +16,23 @@ Both workflows build panels with KiKit, add tabbed connections and mouse bites, 
 
 ## Installation
 
-Create a virtual environment using KiCad's Python so that `pcbnew` is available:
+The PCB panelization tool requires its own dependencies separate from the main DALI system. Create a virtual environment using KiCad's Python so that `pcbnew` bindings are available:
 
 ```bash
 # macOS example — adjust the path for your KiCad installation
 PYTHON=/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3
 
 ${PYTHON} -m venv --system-site-packages venv-ki
-./venv-ki/bin/pip3 install -r requirements.txt
+./venv-ki/bin/pip3 install -r requirements-pcb.txt
 ```
 
 For Linux, use the system Python if KiCad bindings are installed:
 ```bash
 python3 -m venv --system-site-packages venv-ki
-./venv-ki/bin/pip3 install kikit rectpack
+./venv-ki/bin/pip3 install -r requirements-pcb.txt
 ```
+
+**Note:** The main DALI system uses `requirements.txt` (Flask, Redis, etc.). PCB panelization has separate dependencies in `requirements-pcb.txt`.
 
 ## Environment Variables
 
