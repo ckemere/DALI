@@ -8,18 +8,18 @@ WORKFLOW 1: Automatic Canvas Zip Parsing + Packing
   1. Parse Canvas zip submissions, keep latest version per student
   2. Extract .kicad_pcb files into per-student directories
   3. Compute bounding boxes
-  4. Bin-pack into panels (constrained to max panel size)
-  5. Generate YAML specification showing the computed layout
+  4. Pack into panels using rectpack's Guillotine algorithms
+  5. Generate JSON specification showing the computed layout
   6. Build each panel using KiKit's Python API
   7. Copy Edge.Cuts outlines to F.Cu (for maskless/screenless fab)
   8. Export Gerbers (F.Cu, B.Cu, Edge.Cuts, drills)
   9. Generate SVG reference map with student names
 
-WORKFLOW 2: YAML Configuration with Custom Layout
-  1. Load panel layout from YAML specification
+WORKFLOW 2: JSON Configuration with Custom Layout
+  1. Load panel layout from JSON specification
   2. Extract .kicad_pcb files for specified netids
   3. Compute bounding boxes
-  4. Reconstruct panels according to YAML layout (with custom rotations)
+  4. Reconstruct panels according to JSON layout (with custom rotations)
   5. Build panels, export Gerbers, generate reference maps
 
 Usage:
@@ -36,6 +36,7 @@ Usage:
 Requirements:
   - KiCad 8+
   - KiKit: pip install kikit
+  - rectpack: pip install rectpack
 
 JSON Format Example (panel_0.json):
   {
@@ -235,220 +236,145 @@ def read_bounding_boxes(boards: list[StudentBoard]) -> list[StudentBoard]:
 # 3. Bin packing (shelf-based with rotation)
 # ===========================================================================
 
-def bin_pack_panels(
+def pack_panels_with_rectpack(
     boards: list[StudentBoard],
     panel_w: float,
     panel_h: float,
     spacing: float,
     frame_w: float,
-    gap_height_margin: float = 0.10,
+    algorithm: str = "GuillotineBssfMaxas",
 ) -> list[Panel]:
     """
-    Pack boards into panels using Shelf Next-Fit Decreasing Height with gap
-    filling and vertical sub-slot packing.
+    Pack boards into panels using the rectpack library with a Guillotine algorithm.
 
-    Each board's footprint on the panel is its bbox + spacing on all sides.
-    The usable area inside the panel is reduced by the frame width.
+    Uses integer coordinates (0.01mm resolution) internally since rectpack works
+    with integers. Each board's footprint includes spacing between items.
 
-    Two gap-filling passes run before each shelf or panel transition:
-      1. Horizontal: boards (possibly rotated) fill leftover width on the shelf.
-      2. Vertical: once shelf height is final, boards (possibly rotated) are
-         stacked into the unused rectangle below each shorter board. This is
-         the "two boards stacked beside a taller one" packing. Both passes
-         preserve the guillotine-cuttable row structure for easy depanelization.
+    The Guillotine algorithms produce layouts that can be cut with straight-line
+    (guillotine) cuts, which is ideal for PCB panelization where boards are
+    separated by guillotine-cuttable tab lines.
+
+    Args:
+        boards: List of StudentBoard objects with width_mm, height_mm
+        panel_w, panel_h: Maximum panel dimensions in mm
+        spacing: Gap between adjacent boards in mm
+        frame_w: Frame/rail width around panel in mm
+        algorithm: Name of rectpack algorithm to use (any Guillotine variant)
+
+    Returns:
+        List of Panel objects with placements.
     """
+    try:
+        import rectpack
+        from rectpack import newPacker, PackingMode, PackingBin
+    except ImportError:
+        sys.exit("ERROR: rectpack is required. Install with: pip install rectpack")
+
+    # Resolve algorithm by name
+    algo_cls = getattr(rectpack, algorithm, None)
+    if algo_cls is None:
+        sys.exit(f"ERROR: Unknown rectpack algorithm '{algorithm}'. "
+                 "Try: GuillotineBssfMaxas, GuillotineBlsfMaxas, GuillotineBafSas")
+
+    # Use integer coords at 0.01mm resolution. rectpack works with ints.
+    SCALE = 100
+
+    # Available space inside the frame
     usable_w = panel_w - 2 * frame_w
     usable_h = panel_h - 2 * frame_w
 
-    # For each board, compute the space it needs (bbox + spacing on each side)
-    @dataclass
-    class PackItem:
-        board: StudentBoard
-        w: float        # width including spacing
-        h: float        # height including spacing
-        rotated: bool = False
-
-    items = []
+    # Pre-check for oversized boards (even with rotation)
+    valid_boards = []
     oversized = []
     for b in boards:
-        w = b.width_mm + 2 * spacing
-        h = b.height_mm + 2 * spacing
-
-        # Try both orientations, see if it fits at all
-        fits_normal = (w <= usable_w and h <= usable_h)
-        fits_rotated = (h <= usable_w and w <= usable_h)
-
-        if not fits_normal and not fits_rotated:
+        w_mm = b.width_mm + spacing
+        h_mm = b.height_mm + spacing
+        fits_normal = (w_mm <= usable_w and h_mm <= usable_h)
+        fits_rotated = (h_mm <= usable_w and w_mm <= usable_h)
+        if not (fits_normal or fits_rotated):
             oversized.append(b)
             continue
-
-        # Prefer landscape orientation (smaller height) to reduce shelf height
-        # and fit more rows; fall back to whichever orientation fits if only one does.
-        if fits_normal and fits_rotated:
-            if h <= w:
-                items.append(PackItem(board=b, w=w, h=h, rotated=False))
-            else:
-                items.append(PackItem(board=b, w=h, h=w, rotated=True))
-        elif fits_normal:
-            items.append(PackItem(board=b, w=w, h=h, rotated=False))
-        else:
-            items.append(PackItem(board=b, w=h, h=w, rotated=True))
+        valid_boards.append(b)
 
     if oversized:
         print(f"\n  WARNING: {len(oversized)} boards too large for panel:")
         for b in oversized:
             print(f"    {b.net_id}: {b.width_mm:.1f} x {b.height_mm:.1f} mm")
 
-    # Sort by height descending (classic shelf heuristic)
-    items.sort(key=lambda it: it.h, reverse=True)
+    if not valid_boards:
+        return []
 
+    # Create packer with selected Guillotine algorithm, allow rotation
+    packer = newPacker(
+        mode=PackingMode.Offline,
+        bin_algo=PackingBin.BBF,
+        pack_algo=algo_cls,
+        rotation=True,
+    )
+
+    # Add rectangles: each board's footprint includes spacing on one side
+    # so that gaps between adjacent boards = one spacing amount.
+    # Note: rectpack doesn't support edge-margin exclusion, so we pad each rect
+    # by `spacing` and later adjust positions. The outer edge will have one
+    # spacing margin absorbed into the frame offset.
+    for i, b in enumerate(valid_boards):
+        w = int(round((b.width_mm + spacing) * SCALE))
+        h = int(round((b.height_mm + spacing) * SCALE))
+        packer.add_rect(w, h, rid=i)
+
+    # Add enough bins so rectpack can always find a place for everything.
+    # Use usable area (minus one spacing margin since we padded rects).
+    bin_w = int(round((usable_w + spacing) * SCALE))
+    bin_h = int(round((usable_h + spacing) * SCALE))
+    for _ in range(len(valid_boards)):
+        packer.add_bin(bin_w, bin_h)
+
+    packer.pack()
+
+    # Convert rectpack results to Panel objects
     panels: list[Panel] = []
-    current_panel = Panel(index=0)
-    shelf_y = 0.0       # top of current shelf (y offset within usable area)
-    shelf_h = 0.0       # height of current shelf
-    shelf_x = 0.0       # current x position on shelf
-    current_shelf_items: list = []  # (left_x, w, h) recorded as boards are placed
+    for bin_idx, abin in enumerate(packer):
+        if len(abin) == 0:
+            continue
+        panel = Panel(index=len(panels))
+        for rect in abin:
+            board = valid_boards[rect.rid]
+            # rect.width/height are the packed dimensions (may be rotated from input)
+            in_w = int(round((board.width_mm + spacing) * SCALE))
+            in_h = int(round((board.height_mm + spacing) * SCALE))
+            rotated = (rect.width == in_h and rect.height == in_w)
 
-    def place(w, h, rotated, board):
-        nonlocal shelf_h, shelf_x
-        current_shelf_items.append((frame_w + shelf_x, w, h))
-        if h > shelf_h:
-            shelf_h = h
-        cx = frame_w + shelf_x + w / 2
-        cy = frame_w + shelf_y + h / 2
-        current_panel.placements.append(Placement(
-            board=board, x_mm=cx, y_mm=cy, rotated=rotated,
-        ))
-        shelf_x += w
+            # Actual board dimensions (after rotation)
+            bw = board.height_mm if rotated else board.width_mm
+            bh = board.width_mm if rotated else board.height_mm
 
-    def _best_seq(candidates, slot_w, slot_h):
-        """Return the board sequence (item, fw, fh, frot) that maximises total
-        area placed in this slot. Full combinatorial search; fast in practice
-        because slot_w is narrow so few boards from remaining qualify."""
-        if slot_h <= 0 or not candidates:
-            return []
-        best_area = 0
-        best_seq = []
-        for i, it in enumerate(candidates):
-            for fw, fh, frot in [(it.w, it.h, it.rotated), (it.h, it.w, not it.rotated)]:
-                if fw > slot_w or fh > slot_h:
-                    continue
-                rest = candidates[:i] + candidates[i + 1:]
-                tail = _best_seq(rest, slot_w, slot_h - fh)
-                area = it.board.width_mm * it.board.height_mm + sum(
-                    e[0].board.width_mm * e[0].board.height_mm for e in tail
-                )
-                if area > best_area:
-                    best_area = area
-                    best_seq = [(it, fw, fh, frot)] + tail
-        return best_seq
+            # rect.x/y is the corner of the padded rectangle inside the bin.
+            # Board corner (without padding) is at (rect.x, rect.y) — the padding
+            # sits on one side. Panel-space corner = frame_w + rect_pos.
+            x_mm = rect.x / SCALE + frame_w
+            y_mm = rect.y / SCALE + frame_w
 
-    def fill_subslot(slot_x, slot_y, slot_w, slot_h):
-        """Fill a sub-slot by finding the combination of remaining boards that
-        maximises total board area placed (both orientations, full search)."""
-        seq = _best_seq(remaining, slot_w, slot_h)
-        y = slot_y
-        for it, fw, fh, frot in seq:
-            for k, r in enumerate(remaining):
-                if r is it:
-                    remaining.pop(k)
-                    break
-            current_panel.placements.append(Placement(
-                board=it.board,
-                x_mm=slot_x + fw / 2,
-                y_mm=y + fh / 2,
-                rotated=frot,
+            # Center of the board
+            cx = x_mm + bw / 2
+            cy = y_mm + bh / 2
+
+            panel.placements.append(Placement(
+                board=board, x_mm=cx, y_mm=cy, rotated=rotated,
             ))
-            y += fh
+        panels.append(panel)
 
-    def fill_all_subslots():
-        """Once shelf_h is final, fill the unused rectangle below each board
-        that is shorter than the shelf. Called just before closing a shelf."""
-        for (item_left_x, item_w, item_h) in list(current_shelf_items):
-            sub_h = shelf_h - item_h
-            if sub_h > 0:
-                fill_subslot(
-                    item_left_x,
-                    frame_w + shelf_y + item_h,
-                    item_w,
-                    sub_h,
-                )
-
-    def fill_gap():
-        """Fill remaining horizontal shelf space with any waiting board,
-        trying both orientations. Candidates may be up to gap_height_margin
-        taller than shelf_h, which raises the shelf and widens sub-slots."""
-        while True:
-            gap_w = usable_w - shelf_x
-            if gap_w <= 0:
-                break
-            max_h = min(shelf_h * (1 + gap_height_margin), usable_h - shelf_y)
-            found = None
-            for i, it in enumerate(remaining):
-                if it.w <= gap_w and it.h <= max_h:
-                    found = (i, it.w, it.h, it.rotated, it.board)
-                    break
-                if it.h <= gap_w and it.w <= max_h:
-                    found = (i, it.h, it.w, not it.rotated, it.board)
-                    break
-            if found is None:
-                break
-            i, fw, fh, frot, fboard = found
-            remaining.pop(i)
-            place(fw, fh, frot, fboard)
-
-    def new_shelf(item_h):
-        nonlocal shelf_y, shelf_h, shelf_x
-        fill_all_subslots()
-        current_shelf_items.clear()
-        shelf_y += shelf_h
-        shelf_h = item_h
-        shelf_x = 0.0
-
-    def new_panel():
-        nonlocal current_panel, shelf_y, shelf_h, shelf_x
-        fill_all_subslots()
-        current_shelf_items.clear()
-        if current_panel.placements:
-            panels.append(current_panel)
-        current_panel = Panel(index=len(panels))
-        shelf_y = 0.0
-        shelf_h = 0.0
-        shelf_x = 0.0
-
-    # Current item is popped before fill_gap/fill_all_subslots so it is
-    # never a candidate for filling its own shelf's gaps or sub-slots.
-    remaining = list(items)
-
-    while remaining:
-        item = remaining.pop(0)
-
-        if shelf_x + item.w <= usable_w and shelf_y + max(shelf_h, item.h) <= usable_h:
-            place(item.w, item.h, item.rotated, item.board)
-        elif shelf_y + shelf_h + item.h <= usable_h:
-            fill_gap()
-            new_shelf(item.h)
-            place(item.w, item.h, item.rotated, item.board)
-        else:
-            fill_gap()
-            new_panel()
-            place(item.w, item.h, item.rotated, item.board)
-
-    # Fill sub-slots on the last shelf before closing it
-    fill_all_subslots()
-
-    # Don't forget the last panel
-    if current_panel.placements:
-        panels.append(current_panel)
-
-    # Compute actual panel dimensions
+    # Compute actual panel dimensions from placements
     for p in panels:
-        max_x = max(pl.x_mm + (pl.board.height_mm if pl.rotated else pl.board.width_mm) / 2 + spacing
-                     for pl in p.placements) + frame_w
-        max_y = max(pl.y_mm + (pl.board.width_mm if pl.rotated else pl.board.height_mm) / 2 + spacing
-                     for pl in p.placements) + frame_w
-        p.width_mm = min(max_x, panel_w)
-        p.height_mm = min(max_y, panel_h)
+        max_x = max(
+            pl.x_mm + (pl.board.height_mm if pl.rotated else pl.board.width_mm) / 2
+            for pl in p.placements
+        ) + frame_w
+        max_y = max(
+            pl.y_mm + (pl.board.width_mm if pl.rotated else pl.board.height_mm) / 2
+            for pl in p.placements
+        ) + frame_w
+        p.width_mm = max_x
+        p.height_mm = max_y
 
     return panels
 
@@ -1151,10 +1077,11 @@ def main():
                         help="Mouse bite hole diameter in mm (default: 0.5)")
     parser.add_argument("--mouse-bite-spacing", type=float, default=1.0,
                         help="Mouse bite hole spacing in mm (default: 1.0)")
-    parser.add_argument("--gap-height-margin", type=float, default=0.10,
-                        help="Allow gap-filling boards up to this fraction taller than "
-                             "the current shelf height, raising the shelf slightly to "
-                             "improve horizontal packing (default: 0.10 = 10%%)")
+    parser.add_argument("--packing-algo", type=str, default="GuillotineBssfMaxas",
+                        help="rectpack algorithm to use. Good options: "
+                             "GuillotineBssfMaxas (default, tight packing), "
+                             "GuillotineBlsfMaxas (alternative tight), "
+                             "GuillotineBafSas (fastest). See rectpack docs.")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for layout engine (default: 42)")
     args = parser.parse_args()
@@ -1230,11 +1157,13 @@ def main():
         if not boards:
             sys.exit("ERROR: No valid boards after reading dimensions!")
 
-        # --- Phase 3: Bin pack ---
-        print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm)...")
-        panels = bin_pack_panels(boards, args.panel_width, args.panel_height,
-                                 args.spacing, args.frame_width,
-                                 gap_height_margin=args.gap_height_margin)
+        # --- Phase 3: Bin pack with rectpack ---
+        print(f"\n[4/7] Packing into panels ({args.panel_width:.0f} x {args.panel_height:.0f} mm) using {args.packing_algo}...")
+        panels = pack_panels_with_rectpack(
+            boards, args.panel_width, args.panel_height,
+            args.spacing, args.frame_width,
+            algorithm=args.packing_algo,
+        )
 
         # Generate JSON from computed layout
         print(f"\n[4b/7] Generating JSON panel specifications...")
