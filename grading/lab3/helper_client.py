@@ -266,16 +266,35 @@ class HelperClient:
     # ---- protocol primitives ------------------------------------------
 
     def _wait_for_banner(self, timeout: float) -> None:
-        """Consume input until we see a READY line, or time out."""
+        """Consume input until we see a READY line, or time out.
+
+        Classic Arduinos (ATmega + DTR-reset cap) reboot when the port
+        opens, so READY arrives within a second or two.  Native USB CDC
+        boards (Trinket M0, SAMD, RP2040, etc.) do NOT reset on open —
+        the READY banner was sent at power-on and is long gone.  For
+        those boards we fall back to sending a ``?`` ping.
+        """
         deadline = time.monotonic() + timeout
-        # After opening the port the Arduino has just reset. Drop any
-        # garbage the bootloader left in the buffer and look for READY.
         while time.monotonic() < deadline:
             line = self._readline()
             if line == "READY":
                 return
             if line:
                 log.debug("pre-banner line: %r", line)
+
+        # No banner seen — the board may already be running (native USB
+        # CDC, no auto-reset).  Try a ping.
+        log.debug("no boot banner; trying ping fallback")
+        try:
+            self._ser.reset_input_buffer()
+            resp = self._send_raw("?", expect="READY",
+                                  timeout=ACK_TIMEOUT_S["?"])
+            if resp == "READY":
+                log.info("helper responded to ping (no auto-reset board)")
+                return
+        except Exception:
+            pass
+
         raise HelperTimeout(
             f"Helper did not send READY within {timeout:.1f}s — check wiring "
             "and that button_helper.ino is flashed."
