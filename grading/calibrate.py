@@ -424,7 +424,7 @@ class CalibrationGUI:
     def run(self):
         """Run the calibration GUI.  Returns a calibration dict or None."""
         win = "LED Calibration"
-        cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
+        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
         ret, frame = self.cap.read()
         if ret:
             cv2.imshow(win, frame)
