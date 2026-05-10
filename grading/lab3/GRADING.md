@@ -159,10 +159,10 @@ python -m grading.lab3.grade --capture \
     --quick
 ```
 
-`--quick` runs only 3 segments (baseline, debounce, enter_hour_set)
-for fast iteration (~1 min).
+`--quick` runs only 3 segments (baseline, debounce_reject,
+short_press_reject) for fast iteration (~1 min).
 
-**Timing:** ~4.5 min per student for all 12 segments.
+**Timing:** ~3 min per student for all 4 segments.
 
 ### Step 4 — Calibrate
 
@@ -224,36 +224,48 @@ python -m grading.lab3.score_results \
 
 ## Test Segments
 
-12 segments per student, each starting from a fresh reflash:
+4 segments per student, 3 reflashes (~2.9 min per student):
 
-| #  | Name                  | Stimulus          | What it tests                          |
-|----|-----------------------|-------------------|----------------------------------------|
-|  1 | baseline              | (none)            | Normal clock runs, ~1 Hz timing        |
-|  2 | debounce_reject       | 1 glitch (2 ms)   | Glitch press rejected                  |
-|  3 | enter_hour_set        | 1 long            | Hour LED flashes, minute steady        |
-|  4 | hour_increment_3      | 1 long + 3 short  | Hour advances by 3                     |
-|  5 | hour_wrap             | 1 long + 13 short | Hour wraps 12 -> 1                     |
-|  6 | enter_minute_set      | 2 long            | Minute LED flashes, hour steady        |
-|  7 | minute_increment_4    | 2 long + 4 short  | Minute advances by 4 LEDs              |
-|  8 | minute_wrap           | 2 long + 13 short | Minute wraps 55 -> 0                   |
-|  9 | return_to_normal      | 3 long            | Clock resumes (non-EC students)        |
-| 10 | enter_brightness_set  | 3 long            | Both LEDs flash (EC students)          |
-| 11 | brightness_increment  | 3 long + 5 short  | Brightness changes (EC)                |
-| 12 | return_to_normal_ec   | 4 long            | Clock resumes (EC students)            |
+| # | Name               | Reflash | Stimulus                                   | What it tests                   |
+|---|--------------------|---------|--------------------------------------------|---------------------------------|
+| 1 | baseline           | yes     | (none), 25 s observe                       | Clock runs, ~1 Hz, hour ticks   |
+| 2 | debounce_reject    | no      | 1 glitch (2 ms)                            | Glitch press rejected           |
+| 3 | short_press_reject | yes     | 1 short press                              | Short press ignored in Normal   |
+| 4 | full_cycle         | yes     | L + 13S + L + 13S + L + 13S + L, 8 s obs  | Full FSM cycle (see below)      |
 
-Segments 10-12 are for brightness extra-credit. For non-EC students,
-these segments produce non-matching results that the scorer ignores
-(the student already passed via segment 9).
+Segments 1-2 share a single flash (the debounce test runs against the
+already-running clock). Segments 3-4 each get a fresh flash.
+
+### Segment 4 detail
+
+The full_cycle segment tests the entire mode cycle in one continuous
+sequence with 2-second gaps between short presses:
+
+```
+L               enter Hour-Set
+13 × S (2 s)    cycle hour hand all the way around + 1 (wrap visible)
+L               enter Minute-Set
+13 × S (2 s)    cycle minute hand all the way around + 1 (wrap visible)
+L               enter Brightness (EC) / return to Normal (non-EC)
+13 × S (2 s)    change brightness (EC) / ignored (non-EC)
+L               return to Normal (EC) / enter Hour-Set (non-EC)
+8 s observe     watch for ticking
+```
+
+For non-EC students, the analyzer checks for normal-clock behavior in
+the 2 s gap after the 3rd long press (before the ignored short presses).
+For EC students, the final 8 s observe window shows the resumed clock.
 
 ## Rubric Items
 
-### Video Analysis (37 base + 10 EC points)
+### Video Analysis (39 base + 10 EC points)
 
 | Item | Description | Points |
 |------|-------------|--------|
 | `normal_clock_runs` | Clock runs in Normal mode | 2 |
 | `normal_clock_timing_1hz` | Timing ~1 Hz | 2 |
 | `debounce_rejects_glitch` | 2 ms glitch rejected | 2 |
+| `short_press_ignored_in_normal` | Short press in Normal ignored | 2 |
 | `long_enters_hour_set` | Long press enters Hour-Set | 3 |
 | `hour_flashes_in_hour_set` | Hour LED flashes | 3 |
 | `minute_steady_in_hour_set` | Minute LED steady | 1 |
@@ -299,9 +311,10 @@ these segments produce non-matching results that the scorer ignores
 ### Scoring alternatives
 
 `long_returns_to_normal` and `clock_advances_after_return` can be
-satisfied by **either** segment 9 (3 longs, for non-EC students) or
-segment 12 (4 longs, for EC students). The scorer checks both and
-grants points if either passes.
+satisfied by **either** the non-EC path (checked between the 3rd long
+press and subsequent short presses) or the EC path (checked at the
+final observe window after the 4th long press). The scorer checks
+both and grants points if either passes.
 
 ## File Reference
 

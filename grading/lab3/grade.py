@@ -312,39 +312,45 @@ def capture_student(
                     "graded_items": list(seg.graded_items),
                     "warmup_ms": seg.warmup_ms,
                     "observe_ms": seg.observe_ms,
+                    "reflash": seg.reflash,
                     "flash_success": False,
                     "flash_errors": "",
                 }
 
-                # (a) Flash student board
-                seg_log["flash_start_ms"] = int((time.monotonic() - rec_t0) * 1000)
-                try:
-                    f_ok, f_out, f_err = flash_firmware(
-                        build_dir, dslite_path, ccxml_path, OUTPUT_NAME)
-                except subprocess.TimeoutExpired:
-                    f_ok = False
-                    f_err = "flash timed out"
-                    f_out = ""
-                seg_log["flash_end_ms"] = int((time.monotonic() - rec_t0) * 1000)
-                seg_log["flash_success"] = f_ok
+                # (a) Flash student board (unless reflash=False).
+                if seg.reflash:
+                    seg_log["flash_start_ms"] = int(
+                        (time.monotonic() - rec_t0) * 1000)
+                    try:
+                        f_ok, f_out, f_err = flash_firmware(
+                            build_dir, dslite_path, ccxml_path, OUTPUT_NAME)
+                    except subprocess.TimeoutExpired:
+                        f_ok = False
+                        f_err = "flash timed out"
+                        f_out = ""
+                    seg_log["flash_end_ms"] = int(
+                        (time.monotonic() - rec_t0) * 1000)
+                    seg_log["flash_success"] = f_ok
 
-                if not f_ok:
-                    err_text = ((f_err or f_out) or "").strip()
-                    seg_log["flash_errors"] = "\n".join(
-                        err_text.split("\n")[:3])
-                    print(f"     flash FAIL ({err_text.splitlines()[:1]})")
-                    # Skip stimulus + observe for this segment; move on.
-                    # The analyzer will see no debug-LED cycle for this
-                    # window and score NO_DATA for its rubric items.
-                    seg_results.append(seg_log)
-                    continue
+                    if not f_ok:
+                        err_text = ((f_err or f_out) or "").strip()
+                        seg_log["flash_errors"] = "\n".join(
+                            err_text.split("\n")[:3])
+                        print(f"     flash FAIL ({err_text.splitlines()[:1]})")
+                        seg_results.append(seg_log)
+                        continue
 
-                segments_flashed += 1
-                print(f"     flash PASS")
+                    segments_flashed += 1
+                    print(f"     flash PASS")
 
-                # (b) Boot window -- student firmware starting up.
-                time.sleep(BOOT_AFTER_FLASH_S)
-                seg_log["boot_end_ms"] = int((time.monotonic() - rec_t0) * 1000)
+                    # (b) Boot window -- student firmware starting up.
+                    time.sleep(BOOT_AFTER_FLASH_S)
+                    seg_log["boot_end_ms"] = int(
+                        (time.monotonic() - rec_t0) * 1000)
+                else:
+                    seg_log["flash_success"] = True
+                    seg_log["flash_errors"] = "(no reflash)"
+                    print(f"     (continuing from previous segment)")
 
                 # (c) Warmup window -- quiet observation of normal mode
                 #     before any stimulus.
@@ -585,7 +591,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     seg.add_argument(
         "--quick", action="store_true",
-        help="Shorthand for --segments baseline,debounce_reject,enter_hour_set",
+        help="Shorthand for --segments baseline,debounce_reject,short_press_reject",
     )
     seg.add_argument(
         "--list-segments", action="store_true",
@@ -652,7 +658,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     names: Optional[List[str]]
     if args.quick:
-        names = ["baseline", "debounce_reject", "enter_hour_set"]
+        names = ["baseline", "debounce_reject", "short_press_reject"]
     else:
         names = _parse_segment_filter(args.segments)
 

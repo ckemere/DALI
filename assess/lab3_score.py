@@ -25,38 +25,32 @@ from typing import Dict
 # match the ``graded_items`` declared in ``grading.lab3.segments``.
 
 VIDEO_RUBRIC_ITEMS = [
-    # -- Segment 1: baseline clock operation -------------------------
+    # -- Segment 1 (baseline): clock runs normally --------------------
     "normal_clock_runs",
     "normal_clock_timing_1hz",
 
-    # -- Segment 2: debounce -----------------------------------------
+    # -- Segment 2 (debounce_reject): glitch ignored ------------------
     "debounce_rejects_glitch",
 
-    # -- Segment 3: enter hour-set -----------------------------------
+    # -- Segment 3 (short_press_reject): short press ignored ----------
+    "short_press_ignored_in_normal",
+
+    # -- Segment 4 (full_cycle): full FSM cycle -----------------------
+    # Hour-Set phase
     "long_enters_hour_set",
     "hour_flashes_in_hour_set",
     "minute_steady_in_hour_set",
     "clock_does_not_advance_in_hour_set",
-
-    # -- Segment 4: hour increment -----------------------------------
     "short_increments_hour",
-
-    # -- Segment 5: hour wrap ----------------------------------------
     "hour_wraps_12_to_1",
-
-    # -- Segment 6: enter minute-set ---------------------------------
+    # Minute-Set phase
     "long_enters_minute_set",
     "minute_flashes_in_minute_set",
     "hour_steady_in_minute_set",
     "clock_does_not_advance_in_minute_set",
-
-    # -- Segment 7: minute increment ---------------------------------
     "short_increments_minute",
-
-    # -- Segment 8: minute wrap --------------------------------------
     "minute_wraps_55_to_0",
-
-    # -- Segment 9: return to normal (non-EC path: 3 longs) ----------
+    # Return to normal
     "long_returns_to_normal",
     "clock_advances_after_return",
 ]
@@ -69,6 +63,9 @@ VIDEO_RUBRIC_DESCRIPTIONS: Dict[str, str] = {
 
     "debounce_rejects_glitch":
         "2 ms glitch press is rejected (no mode change or position change)",
+
+    "short_press_ignored_in_normal":
+        "Short press in Normal mode is ignored (no mode change)",
 
     "long_enters_hour_set":
         "A long press transitions from Normal to Hour-Set mode",
@@ -109,6 +106,8 @@ VIDEO_RUBRIC_POINTS: Dict[str, int] = {
     "normal_clock_timing_1hz":              2,
 
     "debounce_rejects_glitch":              2,
+
+    "short_press_ignored_in_normal":        2,
 
     "long_enters_hour_set":                 3,
     "hour_flashes_in_hour_set":             3,
