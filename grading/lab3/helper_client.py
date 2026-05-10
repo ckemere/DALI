@@ -439,6 +439,7 @@ def _cli_smoke(args: argparse.Namespace) -> int:
             ("S", "short",  h.short_press),
             ("L", "long",   h.long_press),
         ):
+            time.sleep(1.0)
             t0 = time.monotonic()
             fn()
             dt_ms = (time.monotonic() - t0) * 1e3
