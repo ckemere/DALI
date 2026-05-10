@@ -61,7 +61,7 @@ is called a *segment* and is scored independently.
 
 ## Prerequisites
 
-- Python venv with DALI requirements (`pip install -r requirements.txt`)
+- Python environment (see Step 1 for micromamba setup)
 - TI ARM Clang compiler and MSPM0 SDK
 - DSLite on PATH or via `DSLITE_PATH`
 - ffmpeg installed
@@ -114,9 +114,17 @@ same calibration.
 
 ### Step 1 — Set up environment
 
+**First time only — create the conda environment:**
+```bash
+micromamba create -n dali python=3.11 opencv numpy pyyaml -c conda-forge
+micromamba activate dali
+pip install pyserial google-generativeai
+```
+
+**Each grading session:**
 ```bash
 cd ~/lab3_grading
-source ~/dali-venv/bin/activate
+micromamba activate dali
 export DALI_ROOT=/path/to/DALI
 export PYTHONPATH="$DALI_ROOT"
 set -a; source "$DALI_ROOT/.env"; set +a
