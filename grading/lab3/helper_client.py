@@ -89,6 +89,7 @@ BOOT_BANNER_TIMEOUT_S = 5.0
 KNOWN_VIDS = {
     0x2341,  # Arduino LLC / Arduino SA
     0x2A03,  # Arduino.org
+    0x239A,  # Adafruit Industries (Trinket, Feather, etc.)
     0x1A86,  # QinHeng / CH340 (Nano clones)
     0x0403,  # FTDI
     0x10C4,  # Silicon Labs CP210x
