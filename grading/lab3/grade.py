@@ -687,6 +687,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--analyze-videos", action="store_true",
         help="Run video analyzer on captured videos and produce a results CSV.",
     )
+    mode.add_argument(
+        "--code-review", action="store_true",
+        help="Run LLM code review on student submissions.",
+    )
+    mode.add_argument(
+        "--trends", action="store_true",
+        help="Run trend analysis on previously collected code review snippets.",
+    )
 
     inp = p.add_argument_group("input")
     inp.add_argument(
@@ -753,6 +761,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print diagnostic info during analysis",
     )
 
+    llm = p.add_argument_group("code review")
+    llm.add_argument(
+        "--llm-output", metavar="FILE",
+        help="Write LLM code review results JSON to FILE",
+    )
+    llm.add_argument(
+        "--trends-output", metavar="FILE",
+        help="Write trend analysis JSON to FILE (used with --trends)",
+    )
+    llm.add_argument(
+        "--model", default=None,
+        help="Gemini model name (default: gemini-2.5-flash)",
+    )
+
     out = p.add_argument_group("output")
     out.add_argument(
         "--video-dir", default="./videos",
@@ -768,6 +790,127 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return p
+
+
+def _run_code_review(args):
+    """Extract submissions, send to Gemini, save results."""
+    from grading.lab3.code_review import review_bulk, format_results, SNIPPET_KEYS
+    from assess.lab3_score import ALL_LLM_ITEMS
+
+    students = _discover_submissions(args.submissions, only=args.only)
+    if not students:
+        print("No submissions found.")
+        return
+
+    print(f"Lab 3 code review: {len(students)} student(s)")
+
+    # Extract all zips to temp dirs.
+    student_dirs = {}
+    temp_dirs = []
+    for name, zip_path in sorted(students.items()):
+        td = tempfile.mkdtemp(prefix=f"lab3_cr_{name}_")
+        temp_dirs.append(td)
+        try:
+            extract_submission(zip_path, td)
+            student_dirs[name] = td
+        except zipfile.BadZipFile:
+            print(f"  {name}: bad zip, skipping")
+
+    try:
+        results = review_bulk(
+            student_dirs,
+            model=args.model or "gemini-2.5-flash",
+            verbose=args.verbose,
+        )
+    finally:
+        for td in temp_dirs:
+            shutil.rmtree(td, ignore_errors=True)
+
+    # Print summary.
+    for name in sorted(results):
+        r = results[name]
+        n_pass = sum(1 for k in ALL_LLM_ITEMS
+                     if isinstance(r.get(k), dict)
+                     and r[k].get("verdict") == "PASS")
+        n_fail = sum(1 for k in ALL_LLM_ITEMS
+                     if isinstance(r.get(k), dict)
+                     and r[k].get("verdict") == "FAIL")
+        print(f"  {name}: {n_pass} PASS / {n_fail} FAIL")
+
+    # Save results.
+    out_path = args.llm_output or "llm_results.json"
+    with open(out_path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to {out_path}")
+
+    # Also write a CSV summary.
+    if args.results_csv:
+        all_items = ALL_LLM_ITEMS
+        cols = ["student"] + [x for k in all_items for x in (k, k + "_detail")]
+        with open(args.results_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            writer.writeheader()
+            for name in sorted(results):
+                r = results[name]
+                row = {"student": name}
+                for k in all_items:
+                    entry = r.get(k, {})
+                    if isinstance(entry, dict):
+                        row[k] = entry.get("verdict", "")
+                        row[k + "_detail"] = entry.get("reason", "")
+                    else:
+                        row[k] = str(entry)
+                writer.writerow(row)
+        print(f"CSV summary saved to {args.results_csv}")
+
+
+def _run_trends(args):
+    """Load LLM results and run trend analysis."""
+    from grading.lab3.code_review import SNIPPET_KEYS
+    from assess.lab3_code_review import analyze_trends
+
+    with open(args.llm_output) as f:
+        llm_results = json.load(f)
+
+    # Extract snippets per student.
+    student_snippets = {}
+    for name, r in llm_results.items():
+        if not isinstance(r, dict):
+            continue
+        snippets = {k: r.get(k, "") for k in SNIPPET_KEYS}
+        if any(snippets.values()):
+            student_snippets[name] = snippets
+
+    if not student_snippets:
+        print("No snippets found in LLM results.")
+        return
+
+    print(f"Trend analysis: {len(student_snippets)} students with snippets")
+
+    trends = analyze_trends(
+        student_snippets,
+        model=args.model or "gemini-2.5-flash",
+        verbose=args.verbose,
+    )
+
+    out_path = args.trends_output or "trends.json"
+    with open(out_path, "w") as f:
+        json.dump(trends, f, indent=2)
+    print(f"\nTrend analysis saved to {out_path}")
+
+    # Print highlights.
+    if "approach_clusters" in trends:
+        print("\n── Approach Clusters ──")
+        for c in trends["approach_clusters"]:
+            print(f"  {c.get('approach', '?')}: "
+                  f"{', '.join(c.get('students', []))}")
+    if "notable_implementations" in trends:
+        print("\n── Notable Implementations ──")
+        for n in trends["notable_implementations"]:
+            if isinstance(n, dict):
+                print(f"  {n.get('student', '?')}: {n.get('reason', '')}")
+            else:
+                print(f"  {n}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -792,6 +935,33 @@ def main(argv: Optional[List[str]] = None) -> int:
                 use_brightness=args.use_brightness,
                 verbose=args.verbose,
             )
+        except KeyboardInterrupt:
+            print("interrupted")
+            return 130
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.code_review:
+        if not args.submissions:
+            parser.error("--submissions is required with --code-review")
+        try:
+            _run_code_review(args)
+        except KeyboardInterrupt:
+            print("interrupted")
+            return 130
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.trends:
+        if not args.llm_output:
+            parser.error("--llm-output is required with --trends "
+                         "(path to the JSON from --code-review)")
+        try:
+            _run_trends(args)
         except KeyboardInterrupt:
             print("interrupted")
             return 130
@@ -839,7 +1009,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         return 0
 
-    parser.error("no mode selected (use --capture or --analyze-videos)")
+    parser.error("no mode selected (use --capture, --analyze-videos, "
+                 "--code-review, or --trends)")
 
 
 if __name__ == "__main__":
