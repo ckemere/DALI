@@ -7,11 +7,14 @@ view (or a pre-recorded video) so the grader can click to mark each
 LED position.  The resulting calibration JSON is consumed by the
 video analyzer.
 
+LED groups are configurable per lab via the --lab flag.
+
 Usage:
     python -m grading.calibrate --camera 0 --output calibration.json
     python -m grading.calibrate --video recording.mp4 --output calibration.json
+    python -m grading.calibrate --video recording.mp4 --lab lab3 --output calibration.json
     python -m grading.calibrate --flash reference.out --output calibration.json
-    python -m grading.calibrate --submission student.zip --lab lab1 --output calibration.json
+    python -m grading.calibrate --load calibration.json --video recording.mp4
 """
 
 import argparse
@@ -43,18 +46,45 @@ DEFAULT_OUTPUT = "calibration.json"
 DEFAULT_THRESHOLD = 128
 DEFAULT_SAMPLE_RADIUS = 15
 
-# Each group: (key, display_label, count)
-LED_GROUPS = [
-    ("debug_led", "Debug/Programming LED", 1),
-    ("outer_ring", "Outer Ring (Hours) - CLICK 12 O'CLOCK FIRST", 12),
-    ("inner_ring", "Inner Ring (Seconds) - CLICK 12 O'CLOCK FIRST", 12),
+
+# =====================================================================
+# Configurable LED group definitions
+# =====================================================================
+
+# Each group: (key, display_label, count, color_bgr, is_ring)
+# key:       JSON key and internal identifier
+# label:     shown in the GUI prompt
+# count:     how many LEDs to place
+# color:     BGR tuple for the overlay circles
+# is_ring:   if True, index 0 is 12 o'clock (crosshair + clock labels)
+
+LAB1_GROUPS = [
+    ("debug_led",  "Debug/Programming LED",                         1,  (0, 0, 255),    False),
+    ("outer_ring", "Outer Ring (Hours) - CLICK 12 O'CLOCK FIRST",  12, (0, 165, 255),  True),
+    ("inner_ring", "Inner Ring (Minutes) - CLICK 12 O'CLOCK FIRST", 12, (0, 255, 0),    True),
 ]
 
-# Groups whose first-placed point must be 12 o'clock for the scoring
-# logic to line up (outer/inner ring wrap detection assumes index 0 is
-# at the 12 o'clock position).  We highlight LED 1 of these groups with
-# a crosshair so the grader can always see where they started.
-RING_KEYS = ("outer_ring", "inner_ring")
+LAB3_GROUPS = LAB1_GROUPS + [
+    ("sync_led",   "Sync LED (Arduino D13)",                        1,  (255, 0, 255),  False),
+]
+
+LAB_PRESETS = {
+    "lab1": LAB1_GROUPS,
+    "lab2": LAB1_GROUPS,
+    "lab3": LAB3_GROUPS,
+}
+
+# Legacy threshold key mapping for loading old-format calibration files.
+_LEGACY_THRESHOLD_MAP = {
+    "outer_threshold": "outer_ring",
+    "inner_threshold": "inner_ring",
+    "debug_threshold": "debug_led",
+}
+
+
+def _clock_label(i):
+    """Clock-position label: 12, 1, 2, ..., 11."""
+    return str(12 if i == 0 else i)
 
 
 def flash_binary(binary_path, ccxml_path, dslite_path):
@@ -68,18 +98,20 @@ def flash_binary(binary_path, ccxml_path, dslite_path):
 
 
 class CalibrationGUI:
-    """Interactive GUI for marking LED positions on a live camera feed."""
+    """Interactive GUI for marking LED positions on a live camera feed.
 
-    COLORS = [
-        (0, 0, 255),    # red     – debug LED
-        (0, 165, 255),  # orange  – outer ring
-        (0, 255, 0),    # green   – inner ring
-    ]
+    Parameters:
+        camera_device: Camera index (ignored if video_path is set).
+        sample_radius: Pixel radius for brightness sampling.
+        video_path: Optional pre-recorded video instead of live camera.
+        preset: Optional calibration dict to preload positions/thresholds.
+        groups: LED group definitions list.  Defaults to LAB1_GROUPS.
+    """
 
     DRAG_THRESHOLD = 20  # pixels – click within this to grab an existing point
 
     def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS,
-                 video_path=None, preset=None):
+                 video_path=None, preset=None, groups=None):
         if video_path:
             self.cap = cv2.VideoCapture(video_path)
             if not self.cap.isOpened():
@@ -91,63 +123,79 @@ class CalibrationGUI:
                 raise RuntimeError(f"Cannot open camera device {camera_device}")
             self._video_path = None
 
-        self.positions = {key: [] for key, _, _ in LED_GROUPS}
+        self.groups = list(groups or LAB1_GROUPS)
+        self.positions = {key: [] for key, _, _, _, _ in self.groups}
+        self.thresholds = {key: DEFAULT_THRESHOLD for key, _, _, _, _ in self.groups}
         self.group_idx = 0
-        self.debug_threshold = DEFAULT_THRESHOLD
-        self.outer_threshold = DEFAULT_THRESHOLD
-        self.inner_threshold = DEFAULT_THRESHOLD
-        # Which threshold +/- adjusts: 0=outer, 1=inner, 2=debug
-        self._thr_select = 0
         self.sample_radius = sample_radius
         self.show_threshold = False
         self.show_brightness = True
         self.frozen_frame = None
-        # Drag state: (group_key, index) of the point being dragged
         self._dragging = None
-        # Brightness tracking: {(group_key, index): [min, max, count, sum]}
         self._brightness_stats = {}
 
-        # Preload positions/thresholds from an existing calibration.
+        # Threshold cycling: all group keys in order.
+        self._thr_keys = [key for key, _, _, _, _ in self.groups]
+        self._thr_select = 0
+
         if preset is not None:
             self._apply_preset(preset)
 
     def _apply_preset(self, cal):
-        """Seed positions and thresholds from a calibration dict."""
-        for key, _, count in LED_GROUPS:
-            raw = cal.get(key, [])
-            if not isinstance(raw, list):
-                continue
-            loaded = []
-            for p in raw[:count]:
-                try:
-                    loaded.append({"x": int(p["x"]), "y": int(p["y"])})
-                except (KeyError, TypeError, ValueError):
-                    continue
-            self.positions[key] = loaded
+        """Seed positions and thresholds from a calibration dict.
 
-        # Fall through to the first incomplete group so the grader can
-        # finish placing any missing LEDs.
-        for gi, (k, _, cnt) in enumerate(LED_GROUPS):
+        Handles both the new grouped format (``{"groups": {...}}``) and
+        the legacy flat format.
+        """
+        if "groups" in cal:
+            cal_groups = cal["groups"]
+            for key, _, count, _, _ in self.groups:
+                entry = cal_groups.get(key, {})
+                raw = entry.get("positions", [])
+                if not isinstance(raw, list):
+                    continue
+                loaded = []
+                for p in raw[:count]:
+                    try:
+                        loaded.append({"x": int(p["x"]), "y": int(p["y"])})
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                self.positions[key] = loaded
+                if "threshold" in entry:
+                    try:
+                        self.thresholds[key] = int(entry["threshold"])
+                    except (TypeError, ValueError):
+                        pass
+        else:
+            # Legacy flat format.
+            legacy_thr = cal.get("threshold", DEFAULT_THRESHOLD)
+            for key, _, count, _, _ in self.groups:
+                raw = cal.get(key, [])
+                if not isinstance(raw, list):
+                    continue
+                loaded = []
+                for p in raw[:count]:
+                    try:
+                        loaded.append({"x": int(p["x"]), "y": int(p["y"])})
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                self.positions[key] = loaded
+
+                # Try legacy threshold names.
+                thr = legacy_thr
+                for old_name, group_key in _LEGACY_THRESHOLD_MAP.items():
+                    if group_key == key and old_name in cal:
+                        thr = int(cal[old_name])
+                        break
+                self.thresholds[key] = thr
+
+        # Fall through to the first incomplete group.
+        for gi, (k, _, cnt, _, _) in enumerate(self.groups):
             if len(self.positions[k]) < cnt:
                 self.group_idx = gi
                 break
         else:
-            # All groups already complete.
-            self.group_idx = len(LED_GROUPS) - 1
-
-        legacy_thr = cal.get("threshold")
-        if "outer_threshold" in cal:
-            self.outer_threshold = int(cal["outer_threshold"])
-        elif legacy_thr is not None:
-            self.outer_threshold = int(legacy_thr)
-        if "inner_threshold" in cal:
-            self.inner_threshold = int(cal["inner_threshold"])
-        elif legacy_thr is not None:
-            self.inner_threshold = int(legacy_thr)
-        if "debug_threshold" in cal:
-            self.debug_threshold = int(cal["debug_threshold"])
-        elif legacy_thr is not None:
-            self.debug_threshold = int(legacy_thr)
+            self.group_idx = len(self.groups) - 1
 
         if "sample_radius" in cal:
             try:
@@ -166,7 +214,6 @@ class CalibrationGUI:
         roi = gray[y1:y2, x1:x2]
         if roi.size == 0:
             return 0.0
-        # Build a circular mask within the ROI
         ry, rx = np.ogrid[:roi.shape[0], :roi.shape[1]]
         cy, cx = y - y1, x - x1
         mask = (rx - cx) ** 2 + (ry - cy) ** 2 <= r * r
@@ -177,7 +224,7 @@ class CalibrationGUI:
 
     def _update_brightness_stats(self, gray):
         """Sample brightness at every marked position and update running stats."""
-        for key, _, _ in LED_GROUPS:
+        for key, _, _, _, _ in self.groups:
             for i, pos in enumerate(self.positions[key]):
                 bri = self._brightness(gray, pos["x"], pos["y"])
                 stat_key = (key, i)
@@ -204,7 +251,7 @@ class CalibrationGUI:
         print(f"  {'-'*45}")
         all_mins = []
         all_maxs = []
-        for key, label, _ in LED_GROUPS:
+        for key, label, _, _, _ in self.groups:
             for i in range(len(self.positions[key])):
                 stat_key = (key, i)
                 if stat_key in self._brightness_stats:
@@ -230,29 +277,38 @@ class CalibrationGUI:
             else:
                 print(f"  No clear gap — try pressing 'r' to reset, then "
                       f"observe with some LEDs ON and some OFF")
-            print(f"  Current thresholds: outer={self.outer_threshold}  "
-                  f"inner={self.inner_threshold}  debug={self.debug_threshold}")
+            thr_text = "  ".join(
+                f"{k}={self.thresholds[k]}" for k in self._thr_keys
+            )
+            print(f"  Current thresholds: {thr_text}")
         print()
 
     def _group(self):
-        return LED_GROUPS[self.group_idx]
+        return self.groups[self.group_idx]
 
     def _all_done(self):
         return all(
             len(self.positions[key]) == count
-            for key, _, count in LED_GROUPS
+            for key, _, count, _, _ in self.groups
         )
 
     def _find_nearest(self, x, y):
         """Find the nearest existing point across all groups.
         Returns (group_key, index, distance) or None."""
         best = None
-        for key, _, _ in LED_GROUPS:
+        for key, _, _, _, _ in self.groups:
             for i, pos in enumerate(self.positions[key]):
                 d = ((pos["x"] - x) ** 2 + (pos["y"] - y) ** 2) ** 0.5
                 if best is None or d < best[2]:
                     best = (key, i, d)
         return best
+
+    def _group_label(self, key):
+        """Look up display label for a group key."""
+        for k, label, _, _, _ in self.groups:
+            if k == key:
+                return label
+        return key
 
     # ── mouse callback ──────────────────────────────────────────────
 
@@ -263,12 +319,9 @@ class CalibrationGUI:
             if nearest and nearest[2] < self.DRAG_THRESHOLD:
                 gkey, idx, _ = nearest
                 removed = self.positions[gkey].pop(idx)
-                glabel = next(
-                    lbl for k, lbl, _ in LED_GROUPS if k == gkey
-                )
-                print(f"  Deleted {glabel} LED {idx + 1} "
+                print(f"  Deleted {self._group_label(gkey)} LED {idx + 1} "
                       f"at ({removed['x']}, {removed['y']})")
-                for gi, (k, _, cnt) in enumerate(LED_GROUPS):
+                for gi, (k, _, cnt, _, _) in enumerate(self.groups):
                     if len(self.positions[k]) < cnt:
                         self.group_idx = gi
                         break
@@ -281,16 +334,16 @@ class CalibrationGUI:
                 self._dragging = (nearest[0], nearest[1])
                 return
 
-            key, label, count = self._group()
+            key, label, count, _, _ = self._group()
             if len(self.positions[key]) >= count:
                 return
             self.positions[key].append({"x": x, "y": y})
             n = len(self.positions[key])
             print(f"  {label} LED {n}/{count} at ({x}, {y})")
 
-            if n == count and self.group_idx < len(LED_GROUPS) - 1:
+            if n == count and self.group_idx < len(self.groups) - 1:
                 self.group_idx += 1
-                _, next_label, _ = self._group()
+                _, next_label, _, _, _ = self._group()
                 print(f"\nNow mark: {next_label}")
             elif self._all_done():
                 print("\nAll LEDs marked! Press 's' to save or 'q' to quit.")
@@ -306,10 +359,8 @@ class CalibrationGUI:
         if event == cv2.EVENT_LBUTTONUP and self._dragging is not None:
             gkey, idx = self._dragging
             pos = self.positions[gkey][idx]
-            glabel = next(
-                lbl for k, lbl, _ in LED_GROUPS if k == gkey
-            )
-            print(f"  Moved {glabel} LED {idx + 1} to ({pos['x']}, {pos['y']})")
+            print(f"  Moved {self._group_label(gkey)} LED {idx + 1} "
+                  f"to ({pos['x']}, {pos['y']})")
             self._dragging = None
             return
 
@@ -320,7 +371,13 @@ class CalibrationGUI:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         if self.show_threshold:
-            _, mask = cv2.threshold(gray, self.outer_threshold, 255,
+            # Use the first ring's threshold for the binary view.
+            thr_for_view = DEFAULT_THRESHOLD
+            for key, _, _, _, is_ring in self.groups:
+                if is_ring:
+                    thr_for_view = self.thresholds.get(key, DEFAULT_THRESHOLD)
+                    break
+            _, mask = cv2.threshold(gray, thr_for_view, 255,
                                     cv2.THRESH_BINARY)
             display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
@@ -329,16 +386,13 @@ class CalibrationGUI:
         on_count = 0
         off_count = 0
         all_brightness = []
-        for gi, (key, _, _) in enumerate(LED_GROUPS):
-            color = self.COLORS[gi % len(self.COLORS)]
-            thr = (self.debug_threshold if key == "debug_led"
-                   else self.inner_threshold if key == "inner_ring"
-                   else self.outer_threshold)
+        for key, _, _, color, is_ring in self.groups:
+            thr = self.thresholds.get(key, DEFAULT_THRESHOLD)
             for i, pos in enumerate(self.positions[key]):
                 bri = self._brightness(gray, pos["x"], pos["y"])
                 is_on = bri > thr
                 all_brightness.append(bri)
-                if key != "debug_led":
+                if is_ring:
                     if is_on:
                         on_count += 1
                     else:
@@ -352,15 +406,12 @@ class CalibrationGUI:
                 elif is_on:
                     draw_color = (200, 50, 0)    # dark blue = ON
                 else:
-                    draw_color = color           # group color = OFF
+                    draw_color = color
                 cv2.circle(display, (pos["x"], pos["y"]),
                            self.sample_radius, draw_color, thickness)
 
-                # Mark LED 1 of each ring (the 12 o'clock reference)
-                # with a small crosshair so the grader can always tell
-                # which click was first — scoring assumes index 0 is
-                # at 12 o'clock.
-                if key in RING_KEYS and i == 0:
+                # Crosshair on index 0 of ring groups (12 o'clock ref).
+                if is_ring and i == 0:
                     r = self.sample_radius + 4
                     cv2.line(display,
                              (pos["x"] - r, pos["y"]),
@@ -370,20 +421,20 @@ class CalibrationGUI:
                              (pos["x"], pos["y"] - r),
                              (pos["x"], pos["y"] + r),
                              draw_color, 1)
-                    cv2.putText(display, "12",
-                                (pos["x"] + r + 2, pos["y"] - r - 2),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                                draw_color, 1)
 
+                # LED label.
                 if self.show_brightness:
                     label_text = f"{int(bri)}"
+                elif is_ring:
+                    label_text = _clock_label(i)
                 else:
                     label_text = str(i + 1)
                 cv2.putText(display, label_text,
                             (pos["x"] - 8, pos["y"] + 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, draw_color, 1)
 
-        key, label, count = self._group()
+        # Status text: current group prompt.
+        key, label, count, _, _ = self._group()
         placed = len(self.positions[key])
         if placed < count:
             text = f"Click {label} LED {placed + 1}/{count}"
@@ -395,10 +446,11 @@ class CalibrationGUI:
         cv2.putText(display, text, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        thr_names = ["outer", "inner", "debug"]
-        adjusting = thr_names[self._thr_select]
-        thr_text = (f"outer={self.outer_threshold}  inner={self.inner_threshold}  "
-                    f"debug={self.debug_threshold}")
+        # Threshold status line.
+        adjusting = self._thr_keys[self._thr_select] if self._thr_keys else ""
+        thr_text = "  ".join(
+            f"{k}={self.thresholds[k]}" for k in self._thr_keys
+        )
         if all_brightness:
             bmin, bmax = int(min(all_brightness)), int(max(all_brightness))
             stats_text = (f"thr: {thr_text}  ON={on_count} OFF={off_count}  "
@@ -436,15 +488,17 @@ class CalibrationGUI:
             print("All LEDs already placed from preset. Adjust as needed, "
                   "then press 's' to save or 'q' to quit.")
         else:
-            print("*** IMPORTANT: for each ring, CLICK THE 12 O'CLOCK LED FIRST. ***")
-            print("    The grading script treats the first click as index 0 and")
-            print("    assumes it is at 12 o'clock; starting anywhere else will")
-            print("    cause hour/wrap rubric items to fail silently.\n")
-            _, label, _ = self._group()
+            has_rings = any(is_ring for _, _, _, _, is_ring in self.groups)
+            if has_rings:
+                print("*** IMPORTANT: for each ring, CLICK THE 12 O'CLOCK LED FIRST. ***")
+                print("    The grading script treats the first click as index 0 and")
+                print("    assumes it is at 12 o'clock; starting anywhere else will")
+                print("    cause hour/wrap rubric items to fail silently.\n")
+            _, label, _, _, _ = self._group()
             print(f"Mark: {label}")
         print("Mouse: left-click=place, drag=move, right-click=delete")
         print("Keys:  u=undo, i=toggle label (brightness/LED id),")
-        print("       t=threshold view, d=cycle threshold (outer/inner/debug),")
+        print("       t=threshold view, d=cycle threshold,")
         print("       +/-=adjust selected threshold, [/]=adjust sample radius,")
         print("       b=brightness stats, r=reset stats,")
         print("       space=pause/resume, s=save, q=quit\n")
@@ -471,13 +525,13 @@ class CalibrationGUI:
             if key == ord("q"):
                 break
             elif key == ord("u"):
-                gkey, _, _ = self._group()
+                gkey, _, _, _, _ = self._group()
                 if self.positions[gkey]:
                     p = self.positions[gkey].pop()
                     print(f"  Undid ({p['x']}, {p['y']})")
                 elif self.group_idx > 0:
                     self.group_idx -= 1
-                    gkey, _, _ = self._group()
+                    gkey, _, _, _, _ = self._group()
                     if self.positions[gkey]:
                         p = self.positions[gkey].pop()
                         print(f"  Back to previous group; undid ({p['x']}, {p['y']})")
@@ -488,29 +542,19 @@ class CalibrationGUI:
             elif key == ord("t"):
                 self.show_threshold = not self.show_threshold
             elif key == ord("d"):
-                self._thr_select = (self._thr_select + 1) % 3
-                names = ["outer ring", "inner ring", "debug LED"]
-                print(f"  +/- now adjusts: {names[self._thr_select]} threshold")
+                if self._thr_keys:
+                    self._thr_select = (self._thr_select + 1) % len(self._thr_keys)
+                    print(f"  +/- now adjusts: {self._thr_keys[self._thr_select]} threshold")
             elif key in (ord("+"), ord("=")):
-                if self._thr_select == 0:
-                    self.outer_threshold = min(255, self.outer_threshold + 5)
-                    print(f"  Outer threshold: {self.outer_threshold}")
-                elif self._thr_select == 1:
-                    self.inner_threshold = min(255, self.inner_threshold + 5)
-                    print(f"  Inner threshold: {self.inner_threshold}")
-                else:
-                    self.debug_threshold = min(255, self.debug_threshold + 5)
-                    print(f"  Debug threshold: {self.debug_threshold}")
+                if self._thr_keys:
+                    k = self._thr_keys[self._thr_select]
+                    self.thresholds[k] = min(255, self.thresholds[k] + 5)
+                    print(f"  {k} threshold: {self.thresholds[k]}")
             elif key == ord("-"):
-                if self._thr_select == 0:
-                    self.outer_threshold = max(0, self.outer_threshold - 5)
-                    print(f"  Outer threshold: {self.outer_threshold}")
-                elif self._thr_select == 1:
-                    self.inner_threshold = max(0, self.inner_threshold - 5)
-                    print(f"  Inner threshold: {self.inner_threshold}")
-                else:
-                    self.debug_threshold = max(0, self.debug_threshold - 5)
-                    print(f"  Debug threshold: {self.debug_threshold}")
+                if self._thr_keys:
+                    k = self._thr_keys[self._thr_select]
+                    self.thresholds[k] = max(0, self.thresholds[k] - 5)
+                    print(f"  {k} threshold: {self.thresholds[k]}")
             elif key == ord("f") or key == ord(" "):
                 if self.frozen_frame is None:
                     self.frozen_frame = frame.copy()
@@ -535,19 +579,24 @@ class CalibrationGUI:
                     continue
                 self.cap.release()
                 cv2.destroyAllWindows()
-                return {
-                    "debug_led": self.positions["debug_led"],
-                    "outer_ring": self.positions["outer_ring"],
-                    "inner_ring": self.positions["inner_ring"],
-                    "outer_threshold": self.outer_threshold,
-                    "inner_threshold": self.inner_threshold,
-                    "debug_threshold": self.debug_threshold,
-                    "sample_radius": self.sample_radius,
-                }
+                return self._build_save_dict()
 
         self.cap.release()
         cv2.destroyAllWindows()
         return None
+
+    def _build_save_dict(self):
+        """Build the calibration dict for JSON serialization."""
+        out_groups = {}
+        for key, _, _, _, _ in self.groups:
+            out_groups[key] = {
+                "positions": self.positions.get(key, []),
+                "threshold": self.thresholds.get(key, DEFAULT_THRESHOLD),
+            }
+        return {
+            "groups": out_groups,
+            "sample_radius": self.sample_radius,
+        }
 
 
 # ── CLI ──────────────────────────────────────────────────────────────
@@ -578,7 +627,8 @@ def main():
     )
     parser.add_argument(
         "--lab", default="lab1",
-        help="Lab name for template files when using --submission (default: lab1)",
+        choices=sorted(LAB_PRESETS.keys()),
+        help="Lab preset: selects LED groups and template files (default: lab1)",
     )
     parser.add_argument(
         "--ccxml", default=DEFAULT_CCXML,
@@ -592,14 +642,16 @@ def main():
         "--load", metavar="FILE",
         help="Load an existing calibration JSON to preset LED positions, "
              "thresholds, and sample radius.  Useful for re-calibrating "
-             "against a new video (e.g. dimmer PWM'd Phase 3 footage) "
-             "without re-marking every LED from scratch.",
+             "against a new video without re-marking every LED from scratch.",
     )
     args = parser.parse_args()
 
     if args.flash and args.submission:
         print("Error: use --flash or --submission, not both.")
         sys.exit(1)
+
+    # Select LED groups from lab preset.
+    groups = LAB_PRESETS.get(args.lab, LAB1_GROUPS)
 
     # Map lab name to output binary name
     lab_output_names = {"lab1": "Lab_1", "lab2": "Lab_2", "lab3": "Lab_3"}
@@ -668,10 +720,12 @@ def main():
             sys.exit(1)
         gui = CalibrationGUI(sample_radius=args.sample_radius,
                              video_path=args.video,
-                             preset=preset)
+                             preset=preset,
+                             groups=groups)
     else:
         gui = CalibrationGUI(args.camera, args.sample_radius,
-                             preset=preset)
+                             preset=preset,
+                             groups=groups)
 
     if flash_binary_path:
         print(f"Flashing: {flash_binary_path}")

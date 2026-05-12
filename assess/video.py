@@ -31,15 +31,47 @@ class VideoAnalyzer:
             )
         with open(calibration_path) as f:
             cal = json.load(f)
-        self.outer_pos = [(p["x"], p["y"]) for p in cal["outer_ring"]]
-        self.inner_pos = [(p["x"], p["y"]) for p in cal["inner_ring"]]
-        debug = cal.get("debug_led", [])
-        self.debug_pos = (debug[0]["x"], debug[0]["y"]) if debug else None
-        self.radius = cal.get("sample_radius", 15)
-        legacy_thr = cal.get("threshold", 128)
-        self.outer_threshold = cal.get("outer_threshold", legacy_thr)
-        self.inner_threshold = cal.get("inner_threshold", legacy_thr)
-        self.debug_threshold = cal.get("debug_threshold", legacy_thr)
+
+        if "groups" in cal:
+            # New grouped format from rearchitected calibration GUI.
+            groups = cal["groups"]
+            self.outer_pos = self._pos_list(groups, "outer_ring")
+            self.inner_pos = self._pos_list(groups, "inner_ring")
+            self.debug_pos = self._pos_single(groups, "debug_led")
+            self.sync_pos = self._pos_single(groups, "sync_led")
+            self.radius = cal.get("sample_radius", 15)
+            self.outer_threshold = self._thr(groups, "outer_ring")
+            self.inner_threshold = self._thr(groups, "inner_ring")
+            self.debug_threshold = self._thr(groups, "debug_led")
+            self.sync_threshold = self._thr(groups, "sync_led")
+        else:
+            # Legacy flat format.
+            self.outer_pos = [(p["x"], p["y"]) for p in cal.get("outer_ring", [])]
+            self.inner_pos = [(p["x"], p["y"]) for p in cal.get("inner_ring", [])]
+            debug = cal.get("debug_led", [])
+            self.debug_pos = (debug[0]["x"], debug[0]["y"]) if debug else None
+            self.sync_pos = None
+            self.radius = cal.get("sample_radius", 15)
+            legacy_thr = cal.get("threshold", 128)
+            self.outer_threshold = cal.get("outer_threshold", legacy_thr)
+            self.inner_threshold = cal.get("inner_threshold", legacy_thr)
+            self.debug_threshold = cal.get("debug_threshold", legacy_thr)
+            self.sync_threshold = 128
+
+    @staticmethod
+    def _pos_list(groups, key):
+        entry = groups.get(key, {})
+        return [(p["x"], p["y"]) for p in entry.get("positions", [])]
+
+    @staticmethod
+    def _pos_single(groups, key):
+        entry = groups.get(key, {})
+        pos = entry.get("positions", [])
+        return (pos[0]["x"], pos[0]["y"]) if pos else None
+
+    @staticmethod
+    def _thr(groups, key, default=128):
+        return groups.get(key, {}).get("threshold", default)
 
     def _brightness(self, gray, x, y):
         """Mean brightness in a circular patch around (x, y)."""
@@ -120,9 +152,14 @@ class VideoAnalyzer:
                     self._brightness(gray, *self.debug_pos)
                     if self.debug_pos else 0.0
                 )
+                sync_bri = (
+                    self._brightness(gray, *self.sync_pos)
+                    if self.sync_pos else 0.0
+                )
                 outer = [b > self.outer_threshold for b in outer_bri]
                 inner = [b > self.inner_threshold for b in inner_bri]
                 debug = debug_bri > self.debug_threshold
+                sync = (sync_bri > self.sync_threshold) if self.sync_pos else False
 
                 if verbose and diag_count < 5:
                     all_bri = outer_bri + inner_bri
@@ -140,9 +177,11 @@ class VideoAnalyzer:
                     "outer": outer,
                     "inner": inner,
                     "debug": debug,
+                    "sync": sync,
                     "outer_brightness": outer_bri,
                     "inner_brightness": inner_bri,
                     "debug_brightness": debug_bri,
+                    "sync_brightness": sync_bri,
                 })
             idx += 1
 
