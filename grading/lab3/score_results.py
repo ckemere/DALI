@@ -428,31 +428,32 @@ _HTML_TEMPLATE = """\
 """
 
 
-def _verdict_row(item: str, verdict: str, pts: int, max_pts: int,
-                 desc: str, is_ec: bool = False) -> str:
+def _verdict_row(verdict: str, desc: str, is_ec: bool = False) -> str:
     """Build one HTML table row."""
     css = "pass" if verdict == "PASS" else ("fail" if verdict == "FAIL" else "nodata")
     if is_ec:
         css += " ec"
     return (f'<tr class="{css}">'
             f"<td>{verdict}</td>"
-            f"<td>{pts}/{max_pts}</td>"
             f"<td>{desc}</td>"
             f"</tr>\n")
 
 
 def compute_canvas_score(
     grades_entry: Dict[str, Any],
-    scale_to: int = 100,
+    base_total: int = 100,
+    ec_total: int = 10,
 ) -> int:
-    """Compute the Canvas score (video-only, scaled to ``scale_to``).
+    """Compute the Canvas score (video-only).
 
-    Base video items are scaled so full marks = ``scale_to``.
-    EC video items are added on top as bonus (also scaled).
+    Base video items scale to ``base_total`` (default 100).
+    EC video items scale to ``ec_total`` (default 10) on top.
+    Full base marks = 100, full EC = 110.
     """
     base_earned = 0
     ec_earned = 0
     base_max = sum(ALL_VIDEO_POINTS.get(k, 1) for k in VIDEO_RUBRIC_ITEMS)
+    ec_max = sum(ALL_VIDEO_POINTS.get(k, 1) for k in EC_VIDEO_RUBRIC_ITEMS)
 
     for item in VIDEO_RUBRIC_ITEMS:
         if grades_entry.get(f"video_{item}") == "PASS":
@@ -462,8 +463,8 @@ def compute_canvas_score(
         if grades_entry.get(f"video_{item}") == "PASS":
             ec_earned += ALL_VIDEO_POINTS.get(item, 1)
 
-    scaled_base = round(base_earned / base_max * scale_to)
-    scaled_ec = round(ec_earned / base_max * scale_to)
+    scaled_base = round(base_earned / base_max * base_total)
+    scaled_ec = round(ec_earned / ec_max * ec_total) if ec_max else 0
 
     return scaled_base + scaled_ec
 
@@ -508,17 +509,15 @@ def write_html_reports(
         rows = []
         for item in VIDEO_RUBRIC_ITEMS:
             verdict = g.get(f"video_{item}", "NO_DATA")
-            pts = g.get(f"video_{item}_pts", 0)
-            max_pts = ALL_VIDEO_POINTS.get(item, 1)
             desc = ALL_VIDEO_DESCRIPTIONS.get(item, item)
-            rows.append(_verdict_row(item, verdict, pts, max_pts, desc))
+            rows.append(_verdict_row(verdict, desc))
 
         video_section = (
-            f'<h2 class="section-header">Video Analysis</h2>\n'
+            f'<h2 class="section-header">Video Analysis — {score} / 100</h2>\n'
             f'<p class="summary">{base_pass} / {len(VIDEO_RUBRIC_ITEMS)}'
-            f" base items passed</p>\n"
+            f" items passed</p>\n"
             f"<table>\n"
-            f"<tr><th>Result</th><th>Pts</th><th>Rubric Item</th></tr>\n"
+            f"<tr><th>Result</th><th>Rubric Item</th></tr>\n"
             f"{''.join(rows)}"
             f"</table>"
         )
@@ -528,17 +527,15 @@ def write_html_reports(
             ec_rows = []
             for item in EC_VIDEO_RUBRIC_ITEMS:
                 verdict = g.get(f"video_{item}", "NO_DATA")
-                pts = g.get(f"video_{item}_pts", 0)
-                max_pts = ALL_VIDEO_POINTS.get(item, 1)
                 desc = ALL_VIDEO_DESCRIPTIONS.get(item, item)
-                ec_rows.append(_verdict_row(item, verdict, pts, max_pts,
-                                            desc, is_ec=True))
+                ec_rows.append(_verdict_row(verdict, desc, is_ec=True))
+            ec_bonus = round(ec_pass / len(EC_VIDEO_RUBRIC_ITEMS) * 10)
             ec_section = (
-                f'<h2 class="section-header">Extra Credit</h2>\n'
+                f'<h2 class="section-header">Extra Credit — +{ec_bonus} bonus</h2>\n'
                 f'<p class="summary">{ec_pass} / '
                 f"{len(EC_VIDEO_RUBRIC_ITEMS)} EC items passed</p>\n"
                 f"<table>\n"
-                f"<tr><th>Result</th><th>Pts</th>"
+                f"<tr><th>Result</th>"
                 f"<th>Rubric Item</th></tr>\n"
                 f"{''.join(ec_rows)}"
                 f"</table>"
