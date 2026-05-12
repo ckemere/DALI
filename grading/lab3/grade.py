@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Lab 3 grading orchestrator.
 
-Right now this only implements ``--capture``: compile each student's
-submission once, then record a single continuous video per student
-while reflashing the board repeatedly between scripted button-press
-segments. Analysis, scoring, LLM review, and Canvas upload will be
-added later.
+Modes:
 
-Typical invocation::
+``--capture``
+    Compile each student's submission once, then record a single
+    continuous video per student while reflashing the board repeatedly
+    between scripted button-press segments.
+
+``--analyze-videos``
+    Run the video analyzer on captured videos + metadata, score each
+    rubric item, and write results to a CSV.
+
+Typical invocations::
 
     python -m grading.lab3.grade --capture \\
         --submissions ./lab3_submissions \\
@@ -15,6 +20,11 @@ Typical invocation::
         --video-dir ./videos \\
         --keep-builds ./builds \\
         --results-csv capture_results.csv
+
+    python -m grading.lab3.grade --analyze-videos \\
+        --video-dir ./videos \\
+        --calibration calibration.json \\
+        --results-csv video_results.csv
 
 Quick iteration against a single known-good student, limited to a
 short segment subset:
@@ -531,6 +541,105 @@ def capture_batch(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Video analysis batch
+# ---------------------------------------------------------------------------
+
+
+def analyze_batch(
+    *,
+    video_dir: str,
+    calibration_path: str,
+    results_csv: Optional[str] = None,
+    only: Optional[Sequence[str]] = None,
+    use_brightness: bool = True,
+    verbose: bool = False,
+) -> List[Dict[str, object]]:
+    """Run the video analyzer on all captured videos.
+
+    Expects ``<student>.mp4`` and ``<student>.json`` pairs in
+    *video_dir*.  Results are written to *results_csv* if given.
+    """
+    from assess.lab3_analyze import Lab3Analyzer
+    from assess.video import VideoAnalyzer
+
+    meta_files = sorted(
+        f for f in os.listdir(video_dir)
+        if f.endswith(".json")
+    )
+    if not meta_files:
+        print("No metadata files found in", video_dir)
+        return []
+
+    only_set = {os.path.splitext(os.path.basename(o))[0] for o in (only or ())}
+
+    va = VideoAnalyzer(calibration_path)
+
+    results: List[Dict[str, object]] = []
+    all_items: Optional[List[str]] = None
+
+    for mf in meta_files:
+        student = mf.replace(".json", "")
+        if only_set and student not in only_set:
+            continue
+
+        vid_path = os.path.join(video_dir, f"{student}.mp4")
+        meta_path = os.path.join(video_dir, mf)
+
+        if not os.path.isfile(vid_path):
+            print(f"  [{student}] SKIP — no video file")
+            continue
+
+        print(f"  [{student}]", end=" ", flush=True)
+        try:
+            timeline = va.extract_timeline(
+                vid_path, sample_fps=0, verbose=verbose)
+            with open(meta_path) as f:
+                metadata = json.load(f)
+            analyzer = Lab3Analyzer(
+                timeline, metadata,
+                verbose=verbose, use_brightness=use_brightness)
+            r = analyzer.analyze()
+        except Exception as e:
+            print(f"ERROR: {e}")
+            results.append({"student": student, "error": str(e)})
+            continue
+
+        if all_items is None:
+            all_items = sorted(r.keys())
+
+        n_pass = sum(1 for v in r.values() if v["verdict"] == "PASS")
+        n_fail = sum(1 for v in r.values() if v["verdict"] == "FAIL")
+        n_nd = sum(1 for v in r.values() if v["verdict"] == "NO_DATA")
+        print(f"{n_pass} PASS / {n_fail} FAIL / {n_nd} NO_DATA")
+
+        row: Dict[str, object] = {"student": student}
+        for k in all_items:
+            v = r.get(k, {"verdict": "NO_DATA", "detail": ""})
+            row[k] = v["verdict"]
+            row[k + "_detail"] = v["detail"]
+        results.append(row)
+
+    if results and results_csv and all_items:
+        cols = ["student"] + [
+            x for k in all_items for x in (k, k + "_detail")]
+        with open(results_csv, "w", newline="") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=cols, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(results)
+        print(f"\nWrote {len(results)} students to {results_csv}")
+
+    passed_all = sum(
+        1 for r in results
+        if not r.get("error") and all(
+            r.get(k) == "PASS" for k in (all_items or [])
+        )
+    )
+    print(f"\nSummary: {len(results)} analyzed, {passed_all} all-PASS")
+    return results
+
+
 def _write_csv(results: Sequence[Dict[str, object]], path: str) -> None:
     fieldnames = [
         "student",
@@ -569,10 +678,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Lab 3 grading orchestrator (capture for now).",
     )
 
-    mode = p.add_argument_group("mode")
+    mode = p.add_argument_group("mode (pick one)")
     mode.add_argument(
         "--capture", action="store_true",
-        help="Compile, flash, record. Required for now (other modes TBD).",
+        help="Compile, flash, record video for each student.",
+    )
+    mode.add_argument(
+        "--analyze-videos", action="store_true",
+        help="Run video analyzer on captured videos and produce a results CSV.",
     )
 
     inp = p.add_argument_group("input")
@@ -625,10 +738,25 @@ def _build_parser() -> argparse.ArgumentParser:
              "empty string to let ffmpeg pick)",
     )
 
+    ana = p.add_argument_group("analysis")
+    ana.add_argument(
+        "--calibration", metavar="FILE",
+        help="LED calibration JSON (required for --analyze-videos)",
+    )
+    ana.add_argument(
+        "--use-brightness", action="store_true", default=False,
+        help="Use brightness-based detection instead of threshold-based "
+             "(default: threshold)",
+    )
+    ana.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Print diagnostic info during analysis",
+    )
+
     out = p.add_argument_group("output")
     out.add_argument(
         "--video-dir", default="./videos",
-        help="Where to save <student>.mp4 and <student>.json (default ./videos)",
+        help="Where to save/read <student>.mp4 and <student>.json (default ./videos)",
     )
     out.add_argument(
         "--keep-builds", metavar="DIR",
@@ -636,7 +764,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     out.add_argument(
         "--results-csv", metavar="FILE",
-        help="Write per-student capture results CSV to FILE",
+        help="Write per-student results CSV to FILE",
     )
 
     return p
@@ -652,47 +780,66 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  {'':<22s}    stimulus={s.stimulus}")
         return 0
 
-    if not args.capture:
-        parser.error("no mode selected (use --capture)")
+    if args.analyze_videos:
+        if not args.calibration:
+            parser.error("--calibration is required with --analyze-videos")
+        try:
+            analyze_batch(
+                video_dir=args.video_dir,
+                calibration_path=args.calibration,
+                results_csv=args.results_csv,
+                only=args.only,
+                use_brightness=args.use_brightness,
+                verbose=args.verbose,
+            )
+        except KeyboardInterrupt:
+            print("interrupted")
+            return 130
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        return 0
 
-    if not args.submissions:
-        parser.error("--submissions is required with --capture")
+    if args.capture:
+        if not args.submissions:
+            parser.error("--submissions is required with --capture")
 
-    names: Optional[List[str]]
-    if args.quick:
-        names = ["baseline", "debounce_reject", "short_press_reject"]
-    else:
-        names = _parse_segment_filter(args.segments)
+        names: Optional[List[str]]
+        if args.quick:
+            names = ["baseline", "debounce_reject", "short_press_reject"]
+        else:
+            names = _parse_segment_filter(args.segments)
 
-    try:
-        segments = select_segments(names)
-    except KeyError as e:
-        parser.error(str(e))
+        try:
+            segments = select_segments(names)
+        except KeyError as e:
+            parser.error(str(e))
 
-    video_size = args.video_size or None
+        video_size = args.video_size or None
 
-    try:
-        capture_batch(
-            submissions_dir=args.submissions,
-            ccxml_path=args.ccxml,
-            video_dir=args.video_dir,
-            segments=segments,
-            only=args.only,
-            helper_port=args.helper_port,
-            camera_device=args.camera_device,
-            framerate=args.framerate,
-            video_size=video_size,
-            keep_builds_root=args.keep_builds,
-            results_csv=args.results_csv,
-        )
-    except KeyboardInterrupt:
-        print("interrupted")
-        return 130
-    except Exception as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+        try:
+            capture_batch(
+                submissions_dir=args.submissions,
+                ccxml_path=args.ccxml,
+                video_dir=args.video_dir,
+                segments=segments,
+                only=args.only,
+                helper_port=args.helper_port,
+                camera_device=args.camera_device,
+                framerate=args.framerate,
+                video_size=video_size,
+                keep_builds_root=args.keep_builds,
+                results_csv=args.results_csv,
+            )
+        except KeyboardInterrupt:
+            print("interrupted")
+            return 130
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        return 0
 
-    return 0
+    parser.error("no mode selected (use --capture or --analyze-videos)")
 
 
 if __name__ == "__main__":
