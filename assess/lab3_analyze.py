@@ -57,17 +57,27 @@ def _no_data(detail: str = "") -> Dict[str, str]:
 
 
 # =====================================================================
-# Detection primitives  (brightness-based, threshold-independent)
+# Detection primitives  (dual-mode: brightness or threshold)
+#
+# When ``ub=True`` (use_brightness), primitives operate on raw pixel
+# brightness values from ``outer_brightness`` / ``inner_brightness``
+# fields — immune to threshold miscalibration.
+#
+# When ``ub=False``, primitives use the boolean ``outer`` / ``inner``
+# fields (on-fraction, toggle counting) — the original threshold-based
+# approach which works well when calibration thresholds are correct.
+#
+# ``brightness_responds_to_short`` always uses brightness regardless of
+# mode, since it inherently measures a continuous quantity.
 # =====================================================================
 
-# Map ring name → brightness-list key in the frame dict.
 _BRI_KEY = {"outer": "outer_brightness", "inner": "inner_brightness"}
 
-# Below this mean brightness, no LED is considered active.
 MIN_ACTIVE_BRIGHTNESS = 20
-
-# Minimum brightness swing to count as a real on/off oscillation.
 MIN_FLASH_RANGE = 30
+
+# Threshold-mode: LED considered "on" when on-fraction >= this.
+_ON_FRAC_THRESHOLD = 0.65
 
 
 def _frames_between(
@@ -89,24 +99,38 @@ def _mean_brightness(
 
 def _count_transitions(
     frames: Sequence[Dict], ring: str, idx: int,
+    ub: bool = True,
 ) -> int:
-    """Count midpoint crossings in the brightness time-series."""
+    """Count transitions in the LED time-series.
+
+    ``ub=True``: midpoint crossings in brightness.
+    ``ub=False``: boolean toggles (True→False / False→True).
+    """
     if len(frames) < 2:
         return 0
-    bri_key = _BRI_KEY[ring]
-    values = [f[bri_key][idx] for f in frames]
-    lo, hi = min(values), max(values)
-    if hi - lo < MIN_FLASH_RANGE:
-        return 0
-    mid = (lo + hi) / 2.0
-    n = 0
-    above = values[0] > mid
-    for v in values[1:]:
-        now_above = v > mid
-        if now_above != above:
-            n += 1
-            above = now_above
-    return n
+
+    if ub:
+        bri_key = _BRI_KEY[ring]
+        values = [f[bri_key][idx] for f in frames]
+        lo, hi = min(values), max(values)
+        if hi - lo < MIN_FLASH_RANGE:
+            return 0
+        mid = (lo + hi) / 2.0
+        n = 0
+        above = values[0] > mid
+        for v in values[1:]:
+            now_above = v > mid
+            if now_above != above:
+                n += 1
+                above = now_above
+        return n
+    else:
+        vals = [f[ring][idx] for f in frames]
+        n = 0
+        for i in range(1, len(vals)):
+            if vals[i] != vals[i - 1]:
+                n += 1
+        return n
 
 
 def _is_flashing(
@@ -114,51 +138,78 @@ def _is_flashing(
     ring: str,
     idx: int,
     min_trans: int = MIN_FLASH_TRANSITIONS,
+    ub: bool = True,
 ) -> bool:
-    """True if LED brightness oscillates with enough amplitude and
-    frequency.  Immune to threshold miscalibration and PWM dimming."""
     if len(frames) < 4:
         return False
-    bri_key = _BRI_KEY[ring]
-    values = [f[bri_key][idx] for f in frames]
-    hi = max(values)
-    if hi < MIN_ACTIVE_BRIGHTNESS:
-        return False
-    return _count_transitions(frames, ring, idx) >= min_trans
+
+    if ub:
+        bri_key = _BRI_KEY[ring]
+        values = [f[bri_key][idx] for f in frames]
+        if max(values) < MIN_ACTIVE_BRIGHTNESS:
+            return False
+    else:
+        on_frac = sum(1 for f in frames if f[ring][idx]) / len(frames)
+        if on_frac < 0.1:
+            return False
+
+    return _count_transitions(frames, ring, idx, ub=ub) >= min_trans
 
 
 def _is_steady_on(
     frames: Sequence[Dict],
     ring: str,
     idx: int,
+    ub: bool = True,
 ) -> bool:
-    """LED is bright (above background) and NOT flashing."""
-    mean_bri = _mean_brightness(frames, ring, idx)
-    if mean_bri < MIN_ACTIVE_BRIGHTNESS:
-        return False
-    return not _is_flashing(frames, ring, idx)
+    if ub:
+        mean_bri = _mean_brightness(frames, ring, idx)
+        if mean_bri < MIN_ACTIVE_BRIGHTNESS:
+            return False
+    else:
+        on_frac = sum(1 for f in frames if f[ring][idx]) / len(frames)
+        if on_frac < _ON_FRAC_THRESHOLD:
+            return False
+    return not _is_flashing(frames, ring, idx, ub=ub)
 
 
 def _dominant_position(
     frames: Sequence[Dict],
     ring: str,
     n_leds: int = N_LEDS,
+    ub: bool = True,
 ) -> Tuple[Optional[int], float]:
-    """LED with the highest mean brightness.  Returns ``(index,
-    mean_brightness)`` or ``(None, brightness)`` if nothing is active."""
+    """LED with the highest activity.
+
+    ``ub=True``: highest mean brightness. Returns ``(index, mean_bri)``.
+    ``ub=False``: highest on-fraction. Returns ``(index, on_fraction)``.
+    """
     if not frames:
         return None, 0.0
-    bri_key = _BRI_KEY[ring]
-    best_idx: Optional[int] = None
-    best_mean = -1.0
-    for i in range(n_leds):
-        m = sum(f[bri_key][i] for f in frames) / len(frames)
-        if m > best_mean:
-            best_mean = m
-            best_idx = i
-    if best_mean < MIN_ACTIVE_BRIGHTNESS:
-        return None, best_mean
-    return best_idx, best_mean
+
+    if ub:
+        bri_key = _BRI_KEY[ring]
+        best_idx: Optional[int] = None
+        best_val = -1.0
+        for i in range(n_leds):
+            m = sum(f[bri_key][i] for f in frames) / len(frames)
+            if m > best_val:
+                best_val = m
+                best_idx = i
+        if best_val < MIN_ACTIVE_BRIGHTNESS:
+            return None, best_val
+        return best_idx, best_val
+    else:
+        best_idx = None
+        best_val = -1.0
+        for i in range(n_leds):
+            frac = sum(1 for f in frames if f[ring][i]) / len(frames)
+            if frac > best_val:
+                best_val = frac
+                best_idx = i
+        if best_val < _ON_FRAC_THRESHOLD:
+            return None, best_val
+        return best_idx, best_val
 
 
 def _any_flashing(
@@ -166,10 +217,10 @@ def _any_flashing(
     ring: str,
     n_leds: int = N_LEDS,
     min_trans: int = MIN_FLASH_TRANSITIONS,
+    ub: bool = True,
 ) -> Tuple[bool, Optional[int]]:
-    """True if *any* LED in ``ring`` is flashing.  Returns the index."""
     for i in range(n_leds):
-        if _is_flashing(frames, ring, i, min_trans):
+        if _is_flashing(frames, ring, i, min_trans, ub=ub):
             return True, i
     return False, None
 
@@ -178,9 +229,8 @@ def _detect_ticking(
     frames: Sequence[Dict],
     ring: str,
     n_leds: int = N_LEDS,
+    ub: bool = True,
 ) -> Tuple[bool, int, float]:
-    """Detect clock ticking via position changes in overlapping 0.5 s
-    windows.  Returns ``(is_ticking, n_changes, avg_period_s)``."""
     if len(frames) < 6:
         return False, 0, 0.0
 
@@ -198,7 +248,7 @@ def _detect_ticking(
     while t + window_s <= t_end + 0.01:
         win = _frames_between(frames, t, t + window_s)
         if win:
-            pos, bri = _dominant_position(win, ring, n_leds)
+            pos, _val = _dominant_position(win, ring, n_leds, ub=ub)
             if pos is not None:
                 positions.append(pos)
                 times.append(t + window_s / 2)
@@ -226,12 +276,9 @@ def _track_positions_after_presses(
     n_leds: int = N_LEDS,
     settle_ms: int = SETTLE_MS,
     window_ms: int = SAMPLE_WINDOW_MS,
+    ub: bool = True,
 ) -> List[Optional[int]]:
-    """After each press event, find the dominant LED position.
-
-    ``vt_fn(meta_ms)`` converts a metadata timestamp to video time.
-    Returns one position per press (or None if undetectable).
-    """
+    """After each press event, find the dominant LED position."""
     positions: List[Optional[int]] = []
     for ev in press_events:
         t_start = vt_fn(ev["end_ms"] + settle_ms)
@@ -240,7 +287,7 @@ def _track_positions_after_presses(
         if not win:
             positions.append(None)
             continue
-        pos, _bri = _dominant_position(win, ring, n_leds)
+        pos, _val = _dominant_position(win, ring, n_leds, ub=ub)
         positions.append(pos)
     return positions
 
@@ -276,10 +323,12 @@ class Lab3Analyzer:
         timeline: Sequence[Dict],
         metadata: Dict[str, Any],
         verbose: bool = False,
+        use_brightness: bool = True,
     ):
         self.timeline = list(timeline)
         self.metadata = metadata
         self.verbose = verbose
+        self._ub = use_brightness
 
         seg_list = metadata.get("segments", [])
         self._seg_meta: Dict[str, Dict] = {
@@ -411,11 +460,11 @@ class Lab3Analyzer:
                 "normal_clock_timing_1hz": _no_data(f"only {len(frames)} frames"),
             }
 
-        # Check that the inner ring is ticking (clock is running).
-        ticking, n_changes, avg_period = _detect_ticking(frames, "inner")
+        ub = self._ub
 
-        # Check that outer ring has at least one LED active.
-        outer_pos, outer_bri = _dominant_position(frames[:30], "outer")
+        ticking, n_changes, avg_period = _detect_ticking(frames, "inner", ub=ub)
+
+        outer_pos, outer_bri = _dominant_position(frames[:30], "outer", ub=ub)
         outer_active = outer_pos is not None
 
         if ticking and outer_active:
@@ -477,14 +526,14 @@ class Lab3Analyzer:
             return {"debounce_rejects_glitch": _no_data(
                 f"before={len(before)} after={len(after)} frames")}
 
-        # Compare outer and inner dominant positions before/after.
-        ob, _ = _dominant_position(before, "outer")
-        oa, _ = _dominant_position(after, "outer")
-        ib, _ = _dominant_position(before, "inner")
-        ia, _ = _dominant_position(after, "inner")
+        ub = self._ub
 
-        # Also check that no flashing started (mode change).
-        flash_after, _ = _any_flashing(after, "outer")
+        ob, _ = _dominant_position(before, "outer", ub=ub)
+        oa, _ = _dominant_position(after, "outer", ub=ub)
+        ib, _ = _dominant_position(before, "inner", ub=ub)
+        ia, _ = _dominant_position(after, "inner", ub=ub)
+
+        flash_after, _ = _any_flashing(after, "outer", ub=ub)
 
         if ob == oa and not flash_after:
             return {"debounce_rejects_glitch": _pass(
@@ -526,12 +575,12 @@ class Lab3Analyzer:
             return {"short_press_ignored_in_normal": _no_data(
                 f"before={len(before)} after={len(after)} frames")}
 
-        # No flashing should start (no mode change).
-        flash_outer, _ = _any_flashing(after, "outer")
-        flash_inner, _ = _any_flashing(after, "inner")
+        ub = self._ub
 
-        # Clock should still be ticking normally.
-        ticking, _, _ = _detect_ticking(after, "inner")
+        flash_outer, _ = _any_flashing(after, "outer", ub=ub)
+        flash_inner, _ = _any_flashing(after, "inner", ub=ub)
+
+        ticking, _, _ = _detect_ticking(after, "inner", ub=ub)
 
         if not flash_outer and not flash_inner:
             return {"short_press_ignored_in_normal": _pass(
@@ -592,21 +641,20 @@ class Lab3Analyzer:
         if not meta or "full_cycle" not in self._anchors:
             return self._full_cycle_no_data("segment missing")
 
+        ub = self._ub
+
         stim_events = meta.get("stim_events")
         if stim_events:
-            # Per-token timing from host-side metadata.
             vt = self._vt_fn("full_cycle")
             longs = [e for e in stim_events if e["token"] == "L"]
             shorts = [e for e in stim_events if e["token"] == "S"]
         else:
-            # Fallback: detect presses from the sync LED in the video.
             seg_start = self._meta_to_video_t(
                 "full_cycle", meta.get("warmup_end_ms", 0))
             seg_end = self._meta_to_video_t(
                 "full_cycle", meta.get("observe_end_ms", 0))
             longs, shorts = self._detect_presses_from_sync(
                 seg_start, seg_end)
-            # Event times are already in video-time ms.
             vt = lambda ms: ms / 1000.0  # noqa: E731
 
         if len(longs) < 4 or len(shorts) < 39:
@@ -625,7 +673,6 @@ class Lab3Analyzer:
 
         # ── Hour-Set phase ──────────────────────────────────────────
 
-        # Window after 1st long press, before 1st short press.
         hs_entry = _frames_between(
             self.timeline,
             vt(longs[0]["end_ms"] + SETTLE_MS),
@@ -636,11 +683,11 @@ class Lab3Analyzer:
             results["long_enters_hour_set"] = _no_data(
                 f"entry window too short ({len(hs_entry)} frames)")
         else:
-            outer_flash, outer_flash_idx = _any_flashing(hs_entry, "outer")
-            inner_pos, inner_frac = _dominant_position(hs_entry, "inner")
+            outer_flash, outer_flash_idx = _any_flashing(hs_entry, "outer", ub=ub)
+            inner_pos, inner_frac = _dominant_position(hs_entry, "inner", ub=ub)
             inner_steady = (
                 inner_pos is not None
-                and _is_steady_on(hs_entry, "inner", inner_pos)
+                and _is_steady_on(hs_entry, "inner", inner_pos, ub=ub)
             )
 
             if outer_flash:
@@ -651,7 +698,7 @@ class Lab3Analyzer:
                     "no outer LED flashing after long press")
 
             if outer_flash:
-                trans = _count_transitions(hs_entry, "outer", outer_flash_idx)
+                trans = _count_transitions(hs_entry, "outer", outer_flash_idx, ub=ub)
                 results["hour_flashes_in_hour_set"] = _pass(
                     f"outer[{outer_flash_idx}] {trans} transitions")
             else:
@@ -662,13 +709,11 @@ class Lab3Analyzer:
                 results["minute_steady_in_hour_set"] = _pass(
                     f"inner[{inner_pos}] bri={_mean_brightness(hs_entry, 'inner', inner_pos):.0f}")
             else:
-                inner_flash, _ = _any_flashing(hs_entry, "inner")
+                inner_flash, _ = _any_flashing(hs_entry, "inner", ub=ub)
                 bri = _mean_brightness(hs_entry, 'inner', inner_pos) if inner_pos is not None else 0
                 results["minute_steady_in_hour_set"] = _fail(
                     f"inner flashing={inner_flash}, bri={bri:.0f}")
 
-        # Clock frozen: inner ring position should not change during
-        # the entire hour-set phase (1st long → 2nd long).
         hs_full = _frames_between(
             self.timeline,
             vt(longs[0]["end_ms"] + SETTLE_MS),
@@ -678,7 +723,7 @@ class Lab3Analyzer:
             results["clock_does_not_advance_in_hour_set"] = _no_data(
                 f"only {len(hs_full)} frames")
         else:
-            ticking, n_chg, _ = _detect_ticking(hs_full, "inner")
+            ticking, n_chg, _ = _detect_ticking(hs_full, "inner", ub=ub)
             if not ticking or n_chg == 0:
                 results["clock_does_not_advance_in_hour_set"] = _pass(
                     f"inner stable ({n_chg} changes)")
@@ -686,9 +731,8 @@ class Lab3Analyzer:
                 results["clock_does_not_advance_in_hour_set"] = _fail(
                     f"inner changed {n_chg} times")
 
-        # Hour increment tracking.
         hour_positions = _track_positions_after_presses(
-            self.timeline, "outer", hour_shorts, vt)
+            self.timeline, "outer", hour_shorts, vt, ub=ub)
         good_inc = _count_increments(hour_positions)
 
         if good_inc >= 10:
@@ -719,11 +763,11 @@ class Lab3Analyzer:
             results["long_enters_minute_set"] = _no_data(
                 f"entry window too short ({len(ms_entry)} frames)")
         else:
-            inner_flash, inner_flash_idx = _any_flashing(ms_entry, "inner")
-            outer_pos, outer_bri = _dominant_position(ms_entry, "outer")
+            inner_flash, inner_flash_idx = _any_flashing(ms_entry, "inner", ub=ub)
+            outer_pos, outer_bri = _dominant_position(ms_entry, "outer", ub=ub)
             outer_steady = (
                 outer_pos is not None
-                and _is_steady_on(ms_entry, "outer", outer_pos)
+                and _is_steady_on(ms_entry, "outer", outer_pos, ub=ub)
             )
 
             if inner_flash:
@@ -734,7 +778,7 @@ class Lab3Analyzer:
                     "no inner LED flashing after 2nd long press")
 
             if inner_flash:
-                trans = _count_transitions(ms_entry, "inner", inner_flash_idx)
+                trans = _count_transitions(ms_entry, "inner", inner_flash_idx, ub=ub)
                 results["minute_flashes_in_minute_set"] = _pass(
                     f"inner[{inner_flash_idx}] {trans} transitions")
             else:
@@ -745,11 +789,10 @@ class Lab3Analyzer:
                 results["hour_steady_in_minute_set"] = _pass(
                     f"outer[{outer_pos}] bri={_mean_brightness(ms_entry, 'outer', outer_pos):.0f}")
             else:
-                outer_flash_chk, _ = _any_flashing(ms_entry, "outer")
+                outer_flash_chk, _ = _any_flashing(ms_entry, "outer", ub=ub)
                 results["hour_steady_in_minute_set"] = _fail(
                     f"outer flashing={outer_flash_chk}")
 
-        # Clock frozen: outer ring position stable during minute-set.
         ms_full = _frames_between(
             self.timeline,
             vt(longs[1]["end_ms"] + SETTLE_MS),
@@ -759,7 +802,7 @@ class Lab3Analyzer:
             results["clock_does_not_advance_in_minute_set"] = _no_data(
                 f"only {len(ms_full)} frames")
         else:
-            ticking, n_chg, _ = _detect_ticking(ms_full, "outer")
+            ticking, n_chg, _ = _detect_ticking(ms_full, "outer", ub=ub)
             if not ticking or n_chg == 0:
                 results["clock_does_not_advance_in_minute_set"] = _pass(
                     f"outer stable ({n_chg} changes)")
@@ -767,9 +810,8 @@ class Lab3Analyzer:
                 results["clock_does_not_advance_in_minute_set"] = _fail(
                     f"outer changed {n_chg} times")
 
-        # Minute increment tracking.
         minute_positions = _track_positions_after_presses(
-            self.timeline, "inner", minute_shorts, vt)
+            self.timeline, "inner", minute_shorts, vt, ub=ub)
         good_inc = _count_increments(minute_positions)
 
         if good_inc >= 10:
@@ -796,16 +838,13 @@ class Lab3Analyzer:
             vt(brightness_shorts[0]["start_ms"]),
         )
 
-        # For non-EC students, the 3rd long returns to Normal mode.
-        # We check for ticking (not flashing) in the gap before the
-        # (ignored) short presses.
         if len(post_3rd) < 5:
             results["long_returns_to_normal"] = _no_data(
                 f"window too short ({len(post_3rd)} frames)")
             results["clock_advances_after_return"] = _no_data("window too short")
         else:
-            outer_flash_3, _ = _any_flashing(post_3rd, "outer")
-            inner_flash_3, _ = _any_flashing(post_3rd, "inner")
+            outer_flash_3, _ = _any_flashing(post_3rd, "outer", ub=ub)
+            inner_flash_3, _ = _any_flashing(post_3rd, "inner", ub=ub)
             neither_flashing = not outer_flash_3 and not inner_flash_3
 
             if neither_flashing:
@@ -815,15 +854,13 @@ class Lab3Analyzer:
                 results["long_returns_to_normal"] = _fail(
                     f"flashing: outer={outer_flash_3} inner={inner_flash_3}")
 
-            # Also check ticking across the wider post-3rd-long window
-            # (the 13 "ignored" short presses with 2 s gaps = ~26 s).
             wide_post_3rd = _frames_between(
                 self.timeline,
                 vt(longs[2]["end_ms"] + SETTLE_MS),
                 vt(longs[3]["start_ms"]),
             )
             ticking_3, n_chg_3, period_3 = _detect_ticking(
-                wide_post_3rd, "inner")
+                wide_post_3rd, "inner", ub=ub)
             if ticking_3 and n_chg_3 >= MIN_TICKING_CHANGES:
                 results["clock_advances_after_return"] = _pass(
                     f"{n_chg_3} inner changes, period={period_3:.2f}s")
@@ -836,15 +873,13 @@ class Lab3Analyzer:
 
         # ── EC Brightness-Set (after 3rd long) ──────────────────────
 
-        # For EC students, the 3rd long enters Brightness-Set mode.
-        # Both rings should flash.
         if len(post_3rd) < 5:
             results["long_enters_brightness_set"] = _no_data("window too short")
             results["both_flash_in_brightness_set"] = _no_data("window too short")
         else:
             both_flash = (
-                _any_flashing(post_3rd, "outer")[0]
-                and _any_flashing(post_3rd, "inner")[0]
+                _any_flashing(post_3rd, "outer", ub=ub)[0]
+                and _any_flashing(post_3rd, "inner", ub=ub)[0]
             )
             if both_flash:
                 results["long_enters_brightness_set"] = _pass(
@@ -855,24 +890,26 @@ class Lab3Analyzer:
                 results["long_enters_brightness_set"] = _fail(
                     "both rings not flashing after 3rd long")
                 results["both_flash_in_brightness_set"] = _fail(
-                    f"outer_flash={_any_flashing(post_3rd, 'outer')[0]} "
-                    f"inner_flash={_any_flashing(post_3rd, 'inner')[0]}")
+                    f"outer_flash={_any_flashing(post_3rd, 'outer', ub=ub)[0]} "
+                    f"inner_flash={_any_flashing(post_3rd, 'inner', ub=ub)[0]}")
 
-        # Brightness responds to short presses: compare average
-        # brightness across the first few press intervals.
+        # Brightness responds to short presses: use max per-frame
+        # brightness of active LEDs (always brightness-based).
         bri_readings: List[float] = []
         for ev in brightness_shorts[:5]:
             t_s = vt(ev["end_ms"] + SETTLE_MS)
             t_e = t_s + SAMPLE_WINDOW_MS / 1000.0
             win = _frames_between(self.timeline, t_s, t_e)
             if win:
-                # Mean brightness across all outer + inner LEDs.
-                all_bri = []
+                frame_maxes = []
                 for f in win:
-                    all_bri.extend(f.get("outer_brightness", []))
-                    all_bri.extend(f.get("inner_brightness", []))
-                if all_bri:
-                    bri_readings.append(statistics.mean(all_bri))
+                    ob = f.get("outer_brightness", [])
+                    ib = f.get("inner_brightness", [])
+                    all_bri = list(ob) + list(ib)
+                    if all_bri:
+                        frame_maxes.append(max(all_bri))
+                if frame_maxes:
+                    bri_readings.append(statistics.mean(frame_maxes))
 
         if len(bri_readings) >= 3:
             changes = sum(
@@ -881,7 +918,8 @@ class Lab3Analyzer:
             )
             if changes >= 2:
                 results["brightness_responds_to_short"] = _pass(
-                    f"{changes} brightness changes in {len(bri_readings)} readings")
+                    f"{changes} brightness changes in {len(bri_readings)} readings: "
+                    f"{[f'{b:.0f}' for b in bri_readings]}")
             else:
                 results["brightness_responds_to_short"] = _fail(
                     f"only {changes} brightness changes: {[f'{b:.0f}' for b in bri_readings]}")
@@ -903,8 +941,8 @@ class Lab3Analyzer:
             results["clock_advances_after_return_ec"] = _no_data(
                 "window too short")
         else:
-            outer_flash_4, _ = _any_flashing(post_4th, "outer")
-            inner_flash_4, _ = _any_flashing(post_4th, "inner")
+            outer_flash_4, _ = _any_flashing(post_4th, "outer", ub=ub)
+            inner_flash_4, _ = _any_flashing(post_4th, "inner", ub=ub)
 
             if not outer_flash_4 and not inner_flash_4:
                 results["long_returns_to_normal_ec"] = _pass(
@@ -914,7 +952,7 @@ class Lab3Analyzer:
                     f"flashing: outer={outer_flash_4} inner={inner_flash_4}")
 
             ticking_4, n_chg_4, period_4 = _detect_ticking(
-                post_4th, "inner")
+                post_4th, "inner", ub=ub)
             if ticking_4 and n_chg_4 >= MIN_TICKING_CHANGES:
                 results["clock_advances_after_return_ec"] = _pass(
                     f"{n_chg_4} inner changes, period={period_4:.2f}s")
@@ -960,6 +998,7 @@ def analyze_from_files(
     metadata_path: str,
     sample_fps: int = 0,
     verbose: bool = False,
+    use_brightness: bool = True,
 ) -> Dict[str, Dict[str, str]]:
     """One-call entry point: load video + calibration + metadata, analyze.
 
@@ -974,5 +1013,6 @@ def analyze_from_files(
     with open(metadata_path) as f:
         metadata = json.load(f)
 
-    analyzer = Lab3Analyzer(timeline, metadata, verbose=verbose)
+    analyzer = Lab3Analyzer(timeline, metadata, verbose=verbose,
+                            use_brightness=use_brightness)
     return analyzer.analyze()
