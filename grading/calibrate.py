@@ -477,15 +477,17 @@ class CalibrationGUI:
                              (pos["x"], pos["y"] + r),
                              draw_color, 1)
 
-                # LED label.
+                # LED label — offset to the right of the circle.
                 if self.show_brightness:
                     label_text = f"{int(bri)}"
                 elif is_ring:
                     label_text = _clock_label(i)
                 else:
                     label_text = str(i + 1)
+                label_x = pos["x"] + self.sample_radius + 3
+                label_y = pos["y"] + 4
                 cv2.putText(display, label_text,
-                            (pos["x"] - 8, pos["y"] + 5),
+                            (label_x, label_y),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, draw_color, 1)
 
         # Build status/threshold/help text for the info panel.
