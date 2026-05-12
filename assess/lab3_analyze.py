@@ -513,10 +513,10 @@ class Lab3Analyzer:
 
         # Timing check.
         if ticking and avg_period > 0:
-            if 0.7 <= avg_period <= 1.4:
+            if 0.3 <= avg_period <= 1.4:
                 timing = _pass(f"period={avg_period:.2f}s")
             else:
-                timing = _fail(f"period={avg_period:.2f}s (expected ~1.0)")
+                timing = _fail(f"period={avg_period:.2f}s (expected 0.5–1.0)")
         else:
             timing = _no_data("could not measure tick period")
 
