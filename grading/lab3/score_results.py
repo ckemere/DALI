@@ -229,6 +229,29 @@ def score_student(
 # =====================================================================
 
 
+def load_video_results_csv(csv_path: str) -> Dict[str, Dict[str, Any]]:
+    """Read a video results CSV into {student: {item: verdict, ...}}.
+
+    The CSV has columns: student, <item>, <item>_detail, ...
+    This extracts only the verdict columns (not _detail).
+    """
+    results: Dict[str, Dict[str, Any]] = {}
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            student = row.get("student", "").strip()
+            if not student:
+                continue
+            data: Dict[str, Any] = {}
+            for key, val in row.items():
+                if key == "student" or key.endswith("_detail"):
+                    continue
+                if val:
+                    data[key] = val
+            results[student] = data
+    return results
+
+
 def generate_grades(
     video_results: Optional[Dict[str, Any]],
     llm_results: Optional[Dict[str, Any]],
@@ -553,7 +576,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--export-rubric", metavar="FILE",
         help="Export the default rubric YAML for editing and exit",
     )
-    parser.add_argument("--video-results", metavar="FILE")
+    parser.add_argument(
+        "--video-results", metavar="FILE",
+        help="Video results CSV from --analyze-videos")
     parser.add_argument("--llm-results", metavar="FILE")
     parser.add_argument("--rubric", metavar="FILE", help="Rubric YAML")
     parser.add_argument("--grades-csv", metavar="FILE")
@@ -584,8 +609,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     video_results = None
     if args.video_results:
-        with open(args.video_results) as f:
-            video_results = json.load(f)
+        video_results = load_video_results_csv(args.video_results)
 
     llm_results = None
     if args.llm_results:

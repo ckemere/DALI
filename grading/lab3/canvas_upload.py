@@ -3,7 +3,7 @@ Upload Lab 3 grades and feedback to Canvas (two-pass workflow).
 
 Pass 1 — Generate HTML grade pages:
     python -m grading.lab3.canvas_upload --generate \\
-        --video-results video_results.json \\
+        --video-results video_results.csv \\
         --html-dir html_reports/ \\
         --video-dir ./videos
 
@@ -11,7 +11,7 @@ Pass 1 — Generate HTML grade pages:
 
 Pass 2 — Upload to Canvas:
     python -m grading.lab3.canvas_upload --upload \\
-        --video-results video_results.json \\
+        --video-results video_results.csv \\
         --html-dir html_reports/ \\
         --video-dir ./videos \\
         --assignment-id 510247
@@ -26,7 +26,6 @@ Requires:
 """
 
 import argparse
-import json
 import os
 import sys
 import tempfile
@@ -46,6 +45,7 @@ from grading.canvas import (
 from assess.build import student_name_from_zip
 from grading.lab3.score_results import (
     generate_grades,
+    load_video_results_csv,
     write_html_reports,
     compute_canvas_score,
 )
@@ -82,9 +82,8 @@ def _build_feedback_zip(student, html_path, video_path):
 
 
 def generate(video_results_path, html_dir, video_dir=None):
-    """Pass 1: generate HTML grade pages from video results."""
-    with open(video_results_path) as f:
-        video_results = json.load(f)
+    """Pass 1: generate HTML grade pages from video results CSV."""
+    video_results = load_video_results_csv(video_results_path)
 
     grades = generate_grades(video_results, None, include_ec=True)
     if not grades:
@@ -111,8 +110,7 @@ def upload(video_results_path, html_dir, video_dir=None,
     if not _REQUESTS_AVAILABLE and not dry_run:
         raise RuntimeError("requests package is required: pip install requests")
 
-    with open(video_results_path) as f:
-        video_results = json.load(f)
+    video_results = load_video_results_csv(video_results_path)
 
     grades = generate_grades(video_results, None, include_ec=True)
     if not grades:
@@ -202,7 +200,7 @@ def main():
 
     parser.add_argument(
         "--video-results", required=True, metavar="FILE",
-        help="Path to video_results.json")
+        help="Path to video results CSV from --analyze-videos")
     parser.add_argument(
         "--html-dir", default="html_reports",
         help="Directory for HTML grade pages (default: html_reports/)")
