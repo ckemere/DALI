@@ -225,6 +225,26 @@ def _any_flashing(
     return False, None
 
 
+def _flashing_position(
+    frames: Sequence[Dict],
+    ring: str,
+    n_leds: int = N_LEDS,
+    ub: bool = True,
+) -> Optional[int]:
+    """Return the index of the LED with the most transitions (the one
+    that's flashing).  Returns None if no LED has enough transitions."""
+    best_idx: Optional[int] = None
+    best_trans = 0
+    for i in range(n_leds):
+        t = _count_transitions(frames, ring, i, ub=ub)
+        if t > best_trans:
+            best_trans = t
+            best_idx = i
+    if best_trans < 2:
+        return None
+    return best_idx
+
+
 def _detect_ticking(
     frames: Sequence[Dict],
     ring: str,
@@ -277,8 +297,16 @@ def _track_positions_after_presses(
     settle_ms: int = SETTLE_MS,
     window_ms: int = SAMPLE_WINDOW_MS,
     ub: bool = True,
+    flashing: bool = False,
 ) -> List[Optional[int]]:
-    """After each press event, find the dominant LED position."""
+    """After each press event, find the active LED position.
+
+    When ``flashing=True``, the tracked ring is in set mode so the
+    active LED is oscillating.  Use ``_flashing_position`` (most
+    transitions) instead of ``_dominant_position`` (highest mean
+    brightness), since a flashing LED's average brightness can be
+    close to background noise.
+    """
     positions: List[Optional[int]] = []
     for ev in press_events:
         t_start = vt_fn(ev["end_ms"] + settle_ms)
@@ -287,7 +315,10 @@ def _track_positions_after_presses(
         if not win:
             positions.append(None)
             continue
-        pos, _val = _dominant_position(win, ring, n_leds, ub=ub)
+        if flashing:
+            pos = _flashing_position(win, ring, n_leds, ub=ub)
+        else:
+            pos, _val = _dominant_position(win, ring, n_leds, ub=ub)
         positions.append(pos)
     return positions
 
@@ -732,7 +763,7 @@ class Lab3Analyzer:
                     f"inner changed {n_chg} times")
 
         hour_positions = _track_positions_after_presses(
-            self.timeline, "outer", hour_shorts, vt, ub=ub)
+            self.timeline, "outer", hour_shorts, vt, ub=ub, flashing=True)
         good_inc = _count_increments(hour_positions)
 
         if good_inc >= 10:
@@ -811,7 +842,7 @@ class Lab3Analyzer:
                     f"outer changed {n_chg} times")
 
         minute_positions = _track_positions_after_presses(
-            self.timeline, "inner", minute_shorts, vt, ub=ub)
+            self.timeline, "inner", minute_shorts, vt, ub=ub, flashing=True)
         good_inc = _count_increments(minute_positions)
 
         if good_inc >= 10:
