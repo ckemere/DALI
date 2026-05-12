@@ -30,8 +30,8 @@ is called a *segment* and is scored independently.
       |
       v
  +---------------------------------+
- | for each segment (12 total):    |
- |   flash student .out            |
+ | for each segment (4 total):     |
+ |   flash student .out (if needed)|
  |   wait boot + warmup            |
  |   run stimulus (Arduino helper) |
  |   observe window                |
@@ -148,7 +148,7 @@ python -m grading.lab3.grade --capture \
 ```
 
 Each student produces `videos/<student>.mp4` (continuous recording,
-all 12 segments) and `videos/<student>.json` (host-side timing log).
+all 4 segments) and `videos/<student>.json` (host-side timing log).
 
 Quick test against one student:
 ```bash
@@ -171,16 +171,18 @@ Calibrate LED positions using a video where the clock is running:
 ```bash
 python -m grading.calibrate \
     --video ./videos/<good_student>.mp4 \
+    --lab lab3 \
     --output calibration.json
 ```
 
-Mark the debug LED, 12 outer-ring LEDs (clockwise from 12 o'clock),
-and 12 inner-ring LEDs.
+Mark all four LED groups in order:
+1. **Debug LED** — XDS110 programming indicator (flashes during reflash)
+2. **Outer ring** (12 LEDs) — clockwise starting at 12 o'clock
+3. **Inner ring** (12 LEDs) — clockwise starting at 12 o'clock
+4. **Sync LED** — Arduino D13 (mirrors button press timing)
 
-> **Note:** The sync LED (Arduino D13) calibration target is pending
-> ([#11](https://github.com/ckemere/DALI/issues/11)). For now, the
-> analyzer uses the host-side timing log from `<student>.json` for
-> press-event timing instead of video-detected sync LED edges.
+Use `--load calibration.json` to reload and adjust a previous calibration.
+Keys: `[`/`]` adjust ROI radius, `+`/`-` adjust thresholds, `space` pause.
 
 ### Step 5 — Analyze videos
 
