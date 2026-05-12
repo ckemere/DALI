@@ -108,7 +108,11 @@ class CalibrationGUI:
         groups: LED group definitions list.  Defaults to LAB1_GROUPS.
     """
 
-    DRAG_THRESHOLD = 20  # pixels – click within this to grab an existing point
+    DRAG_THRESHOLD_MIN = 15  # pixels – minimum grab distance
+
+    @property
+    def drag_threshold(self):
+        return max(self.drag_threshold_MIN, self.sample_radius + 5)
 
     def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS,
                  video_path=None, preset=None, groups=None):
@@ -316,7 +320,7 @@ class CalibrationGUI:
         # ── Right-click: delete nearest point ──
         if event == cv2.EVENT_RBUTTONDOWN:
             nearest = self._find_nearest(x, y)
-            if nearest and nearest[2] < self.DRAG_THRESHOLD:
+            if nearest and nearest[2] < self.drag_threshold:
                 gkey, idx, _ = nearest
                 removed = self.positions[gkey].pop(idx)
                 print(f"  Deleted {self._group_label(gkey)} LED {idx + 1} "
@@ -330,7 +334,7 @@ class CalibrationGUI:
         # ── Left-button down: start drag or place new point ──
         if event == cv2.EVENT_LBUTTONDOWN:
             nearest = self._find_nearest(x, y)
-            if nearest and nearest[2] < self.DRAG_THRESHOLD:
+            if nearest and nearest[2] < self.drag_threshold:
                 self._dragging = (nearest[0], nearest[1])
                 return
 
