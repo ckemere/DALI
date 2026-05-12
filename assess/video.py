@@ -23,6 +23,10 @@ except ImportError:
 class VideoAnalyzer:
     """Analyze LED board video using calibration data."""
 
+    # BGR channel indices for color-filtered brightness extraction.
+    # Mapping: "R"->2, "G"->1, "B"->0 (OpenCV BGR order).
+    _CHANNEL_MAP = {"R": 2, "G": 1, "B": 0}
+
     def __init__(self, calibration_path):
         if cv2 is None:
             raise ImportError(
@@ -58,6 +62,11 @@ class VideoAnalyzer:
             self.debug_threshold = cal.get("debug_threshold", legacy_thr)
             self.sync_threshold = 128
 
+        # Per-group color channel: "R", "G", "B", or None (grayscale).
+        channels = cal.get("color_channels", {})
+        self._outer_ch = self._CHANNEL_MAP.get(channels.get("outer_ring"))
+        self._inner_ch = self._CHANNEL_MAP.get(channels.get("inner_ring"))
+
     @staticmethod
     def _pos_list(groups, key):
         entry = groups.get(key, {})
@@ -74,9 +83,13 @@ class VideoAnalyzer:
         return groups.get(key, {}).get("threshold", default)
 
     def _brightness(self, gray, x, y):
-        """Mean brightness in a circular patch around (x, y)."""
+        """Mean brightness in a circular patch around (x, y).
+
+        ``gray`` is a single-channel (H, W) array — either a grayscale
+        conversion or one channel slice of a BGR frame.
+        """
         r = self.radius
-        h, w = gray.shape
+        h, w = gray.shape[:2]
         y1, y2 = max(0, y - r), min(h, y + r)
         x1, x2 = max(0, x - r), min(w, x + r)
         roi = gray[y1:y2, x1:x2]
@@ -140,12 +153,16 @@ class VideoAnalyzer:
             if idx % skip == 0:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 t = idx / fps
+
+                outer_src = frame[:, :, self._outer_ch] if self._outer_ch is not None else gray
+                inner_src = frame[:, :, self._inner_ch] if self._inner_ch is not None else gray
+
                 outer_bri = [
-                    self._brightness(gray, x, y)
+                    self._brightness(outer_src, x, y)
                     for x, y in self.outer_pos
                 ]
                 inner_bri = [
-                    self._brightness(gray, x, y)
+                    self._brightness(inner_src, x, y)
                     for x, y in self.inner_pos
                 ]
                 debug_bri = (
@@ -163,13 +180,20 @@ class VideoAnalyzer:
 
                 if verbose and diag_count < 5:
                     all_bri = outer_bri + inner_bri
+                    ch_info = ""
+                    if self._outer_ch is not None or self._inner_ch is not None:
+                        inv = {v: k for k, v in self._CHANNEL_MAP.items()}
+                        o_ch = inv.get(self._outer_ch, "gray")
+                        i_ch = inv.get(self._inner_ch, "gray")
+                        ch_info = f"  ch: outer={o_ch} inner={i_ch}"
                     print(f"  [diag] t={t:.2f}s  "
                           f"outer_thr={self.outer_threshold}  "
                           f"inner_thr={self.inner_threshold}  "
                           f"debug={debug_bri:.0f} (thr={self.debug_threshold})  "
                           f"LED min={min(all_bri):.0f}  max={max(all_bri):.0f}  "
                           f"mean={np.mean(all_bri):.0f}  "
-                          f"on={sum(outer)+sum(inner)}/24")
+                          f"on={sum(outer)+sum(inner)}/24"
+                          f"{ch_info}")
                     diag_count += 1
 
                 raw.append({
