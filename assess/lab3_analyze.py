@@ -502,6 +502,50 @@ class Lab3Analyzer:
             return {"short_press_ignored_in_normal": _fail(
                 f"flashing detected: outer={flash_outer} inner={flash_inner}")}
 
+    # ── sync-LED press detection (fallback) ───────────────────────
+
+    def _detect_presses_from_sync(
+        self, t_start: float, t_end: float,
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """Detect button presses from sync LED on/off transitions.
+
+        Returns ``(longs, shorts)`` where each entry has
+        ``start_ms`` / ``end_ms`` in *video-time* milliseconds.
+        """
+        LONG_THRESHOLD_S = 0.8
+        MIN_PRESS_S = 0.05
+
+        frames = _frames_between(self.timeline, t_start, t_end)
+        if not frames:
+            return [], []
+
+        presses: List[Dict] = []
+        in_press = False
+        press_start_t = 0.0
+
+        for f in frames:
+            if f.get("sync", False) and not in_press:
+                in_press = True
+                press_start_t = f["t"]
+            elif not f.get("sync", False) and in_press:
+                in_press = False
+                duration = f["t"] - press_start_t
+                if duration >= MIN_PRESS_S:
+                    tok = "L" if duration > LONG_THRESHOLD_S else "S"
+                    presses.append({
+                        "token": tok,
+                        "start_ms": int(press_start_t * 1000),
+                        "end_ms": int(f["t"] * 1000),
+                    })
+
+        longs = [p for p in presses if p["token"] == "L"]
+        shorts = [p for p in presses if p["token"] == "S"]
+
+        if self.verbose:
+            print(f"  [analyzer] sync LED detected {len(longs)}L + "
+                  f"{len(shorts)}S in [{t_start:.1f}, {t_end:.1f}]s")
+        return longs, shorts
+
     # ── full cycle scoring ──────────────────────────────────────────
 
     def _score_full_cycle(self) -> Dict[str, Dict[str, str]]:
@@ -511,18 +555,26 @@ class Lab3Analyzer:
             return self._full_cycle_no_data("segment missing")
 
         stim_events = meta.get("stim_events")
-        if not stim_events:
-            return self._full_cycle_no_data(
-                "no stim_events in metadata (re-capture with updated code)")
-
-        vt = self._vt_fn("full_cycle")
-
-        longs = [e for e in stim_events if e["token"] == "L"]
-        shorts = [e for e in stim_events if e["token"] == "S"]
+        if stim_events:
+            # Per-token timing from host-side metadata.
+            vt = self._vt_fn("full_cycle")
+            longs = [e for e in stim_events if e["token"] == "L"]
+            shorts = [e for e in stim_events if e["token"] == "S"]
+        else:
+            # Fallback: detect presses from the sync LED in the video.
+            seg_start = self._meta_to_video_t(
+                "full_cycle", meta.get("warmup_end_ms", 0))
+            seg_end = self._meta_to_video_t(
+                "full_cycle", meta.get("observe_end_ms", 0))
+            longs, shorts = self._detect_presses_from_sync(
+                seg_start, seg_end)
+            # Event times are already in video-time ms.
+            vt = lambda ms: ms / 1000.0  # noqa: E731
 
         if len(longs) < 4 or len(shorts) < 39:
             return self._full_cycle_no_data(
-                f"expected 4L+39S, got {len(longs)}L+{len(shorts)}S")
+                f"expected 4L+39S, got {len(longs)}L+{len(shorts)}S"
+                + (" (from sync LED)" if not stim_events else ""))
 
         hour_shorts = shorts[0:13]
         minute_shorts = shorts[13:26]
