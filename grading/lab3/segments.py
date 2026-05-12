@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from .helper_client import HelperClient
 
@@ -111,14 +111,25 @@ def estimate_stimulus_s(tokens: Sequence[str]) -> float:
 def run_stimulus(
     helper: HelperClient,
     tokens: Sequence[str],
-) -> None:
+    ref_t0: float = 0.0,
+) -> List[Dict[str, object]]:
     """Execute the stimulus DSL against ``helper``.
 
-    Blocks until every token completes. Raises whatever the helper
-    raises on protocol errors -- the capture orchestrator catches it
-    and logs the segment as failed.
+    Blocks until every token completes.  Returns a list of per-token
+    event dicts::
+
+        [{"token": "L", "start_ms": 1234, "end_ms": 2789}, ...]
+
+    Times are in ms relative to ``ref_t0``.  Pass
+    ``ref_t0=time.monotonic()`` at recording start so event times
+    align with other metadata timestamps.
+
+    Raises whatever the helper raises on protocol errors -- the
+    capture orchestrator catches it and logs the segment as failed.
     """
+    events: List[Dict[str, object]] = []
     for tok in tokens:
+        t_start = time.monotonic()
         if tok == "G":
             helper.glitch()
         elif tok == "S":
@@ -129,6 +140,13 @@ def run_stimulus(
             time.sleep(int(tok[1:]) / 1000.0)
         else:
             raise ValueError(f"unknown stimulus token {tok!r}")
+        t_end = time.monotonic()
+        events.append({
+            "token": tok,
+            "start_ms": int((t_start - ref_t0) * 1000),
+            "end_ms": int((t_end - ref_t0) * 1000),
+        })
+    return events
 
 
 # ---------------------------------------------------------------------------

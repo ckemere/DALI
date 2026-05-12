@@ -361,7 +361,9 @@ def capture_student(
                 #     this segment's remaining work but keep the run
                 #     going.
                 try:
-                    run_stimulus(helper, seg.stimulus)
+                    stim_events = run_stimulus(
+                        helper, seg.stimulus, ref_t0=rec_t0)
+                    seg_log["stim_events"] = stim_events
                     stim_error = None
                 except HelperError as e:
                     stim_error = str(e)
