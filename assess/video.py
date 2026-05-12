@@ -179,7 +179,6 @@ class VideoAnalyzer:
                 sync = (sync_bri > self.sync_threshold) if self.sync_pos else False
 
                 if verbose and diag_count < 5:
-                    all_bri = outer_bri + inner_bri
                     ch_info = ""
                     if self._outer_ch is not None or self._inner_ch is not None:
                         inv = {v: k for k, v in self._CHANNEL_MAP.items()}
@@ -187,12 +186,13 @@ class VideoAnalyzer:
                         i_ch = inv.get(self._inner_ch, "gray")
                         ch_info = f"  ch: outer={o_ch} inner={i_ch}"
                     print(f"  [diag] t={t:.2f}s  "
-                          f"outer_thr={self.outer_threshold}  "
-                          f"inner_thr={self.inner_threshold}  "
                           f"debug={debug_bri:.0f} (thr={self.debug_threshold})  "
-                          f"LED min={min(all_bri):.0f}  max={max(all_bri):.0f}  "
-                          f"mean={np.mean(all_bri):.0f}  "
-                          f"on={sum(outer)+sum(inner)}/24"
+                          f"outer({self.outer_threshold}): "
+                          f"min={min(outer_bri):.0f} max={max(outer_bri):.0f} "
+                          f"mean={np.mean(outer_bri):.0f} on={sum(outer)}/12  "
+                          f"inner({self.inner_threshold}): "
+                          f"min={min(inner_bri):.0f} max={max(inner_bri):.0f} "
+                          f"mean={np.mean(inner_bri):.0f} on={sum(inner)}/12"
                           f"{ch_info}")
                     diag_count += 1
 
