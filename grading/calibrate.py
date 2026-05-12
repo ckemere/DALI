@@ -68,10 +68,20 @@ LAB3_GROUPS = LAB1_GROUPS + [
     ("sync_led",   "Sync LED (Arduino D13)",                        1,  (255, 0, 255),  False),
 ]
 
+# Default color channels per lab.  None = grayscale.
+LAB3_COLOR_CHANNELS = {
+    "outer_ring": "R",   # red hour LEDs → sample Red channel
+    "inner_ring": "G",   # yellow minute LEDs → sample Green channel
+}
+
 LAB_PRESETS = {
     "lab1": LAB1_GROUPS,
     "lab2": LAB1_GROUPS,
     "lab3": LAB3_GROUPS,
+}
+
+LAB_COLOR_CHANNELS = {
+    "lab3": LAB3_COLOR_CHANNELS,
 }
 
 # Legacy threshold key mapping for loading old-format calibration files.
@@ -106,16 +116,21 @@ class CalibrationGUI:
         video_path: Optional pre-recorded video instead of live camera.
         preset: Optional calibration dict to preload positions/thresholds.
         groups: LED group definitions list.  Defaults to LAB1_GROUPS.
+        color_channels: Optional dict mapping group key → channel letter
+            ("R", "G", "B") for color-filtered brightness sampling.
     """
 
     DRAG_THRESHOLD_MIN = 15  # pixels – minimum grab distance
+    _CHANNEL_MAP = {"R": 2, "G": 1, "B": 0}
+    _CHANNEL_LETTERS = ["R", "G", "B"]
 
     @property
     def drag_threshold(self):
         return max(self.DRAG_THRESHOLD_MIN, self.sample_radius + 5)
 
     def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS,
-                 video_path=None, preset=None, groups=None):
+                 video_path=None, preset=None, groups=None,
+                 color_channels=None):
         if video_path:
             self.cap = cv2.VideoCapture(video_path)
             if not self.cap.isOpened():
@@ -137,6 +152,9 @@ class CalibrationGUI:
         self.frozen_frame = None
         self._dragging = None
         self._brightness_stats = {}
+
+        # Per-group color channel: group_key → "R"/"G"/"B" or absent for grayscale.
+        self._color_channels = dict(color_channels or {})
 
         # Threshold cycling: all group keys in order.
         self._thr_keys = [key for key, _, _, _, _ in self.groups]
@@ -207,15 +225,24 @@ class CalibrationGUI:
             except (TypeError, ValueError):
                 pass
 
+        if "color_channels" in cal:
+            for k, v in cal["color_channels"].items():
+                if v in self._CHANNEL_MAP:
+                    self._color_channels[k] = v
+
     # ── helpers ──────────────────────────────────────────────────────
 
-    def _brightness(self, gray, x, y):
-        """Mean brightness in a circular patch around (x, y)."""
+    def _brightness(self, src, x, y):
+        """Mean brightness in a circular patch around (x, y).
+
+        ``src`` is a single-channel 2-D array (grayscale or one BGR
+        channel slice).
+        """
         r = self.sample_radius
-        h, w = gray.shape
+        h, w = src.shape[:2]
         y1, y2 = max(0, y - r), min(h, y + r)
         x1, x2 = max(0, x - r), min(w, x + r)
-        roi = gray[y1:y2, x1:x2]
+        roi = src[y1:y2, x1:x2]
         if roi.size == 0:
             return 0.0
         ry, rx = np.ogrid[:roi.shape[0], :roi.shape[1]]
@@ -226,11 +253,23 @@ class CalibrationGUI:
             return 0.0
         return float(np.mean(pixels))
 
-    def _update_brightness_stats(self, gray):
+    def _source_for_group(self, frame, gray, group_key):
+        """Return the single-channel image to sample for ``group_key``.
+
+        If a color channel is configured ("R"/"G"/"B"), extract that
+        channel from the BGR ``frame``; otherwise fall back to ``gray``.
+        """
+        ch_letter = self._color_channels.get(group_key)
+        if ch_letter and ch_letter in self._CHANNEL_MAP:
+            return frame[:, :, self._CHANNEL_MAP[ch_letter]]
+        return gray
+
+    def _update_brightness_stats(self, frame, gray):
         """Sample brightness at every marked position and update running stats."""
         for key, _, _, _, _ in self.groups:
+            src = self._source_for_group(frame, gray, key)
             for i, pos in enumerate(self.positions[key]):
-                bri = self._brightness(gray, pos["x"], pos["y"])
+                bri = self._brightness(src, pos["x"], pos["y"])
                 stat_key = (key, i)
                 if stat_key not in self._brightness_stats:
                     self._brightness_stats[stat_key] = [bri, bri, 1, bri]
@@ -250,7 +289,11 @@ class CalibrationGUI:
         if not self._brightness_stats:
             print("  No brightness data yet. Mark LEDs and wait a moment.")
             return
-        print("\n  === Brightness Summary ===")
+        ch_info = ""
+        if self._color_channels:
+            ch_info = "  channels: " + ", ".join(
+                f"{k}={v}" for k, v in self._color_channels.items())
+        print(f"\n  === Brightness Summary ==={ch_info}")
         print(f"  {'Group':<15} {'LED':>3}  {'Min':>5}  {'Max':>5}  {'Avg':>5}")
         print(f"  {'-'*45}")
         all_mins = []
@@ -379,7 +422,6 @@ class CalibrationGUI:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         if self.show_threshold:
-            # Use the first ring's threshold for the binary view.
             thr_for_view = DEFAULT_THRESHOLD
             for key, _, _, _, is_ring in self.groups:
                 if is_ring:
@@ -389,22 +431,27 @@ class CalibrationGUI:
                                     cv2.THRESH_BINARY)
             display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
 
-        self._update_brightness_stats(gray)
+        self._update_brightness_stats(frame, gray)
 
         on_count = 0
         off_count = 0
-        all_brightness = []
+        outer_bri_list = []
+        inner_bri_list = []
         for key, _, _, color, is_ring in self.groups:
             thr = self.thresholds.get(key, DEFAULT_THRESHOLD)
+            src = self._source_for_group(frame, gray, key)
             for i, pos in enumerate(self.positions[key]):
-                bri = self._brightness(gray, pos["x"], pos["y"])
+                bri = self._brightness(src, pos["x"], pos["y"])
                 is_on = bri > thr
-                all_brightness.append(bri)
                 if is_ring:
                     if is_on:
                         on_count += 1
                     else:
                         off_count += 1
+                if key == "outer_ring":
+                    outer_bri_list.append(bri)
+                elif key == "inner_ring":
+                    inner_bri_list.append(bri)
 
                 is_dragged = (self._dragging is not None
                               and self._dragging == (key, i))
@@ -468,20 +515,29 @@ class CalibrationGUI:
         )
         lines.append((f"thr: {thr_text}  [+/-]->{adjusting}", cyan, 0.4, 1))
 
-        # Line 3: live stats (only when LEDs are placed).
-        if all_brightness:
-            bmin, bmax = int(min(all_brightness)), int(max(all_brightness))
-            lines.append((
-                f"ON={on_count} OFF={off_count}  "
-                f"range={bmin}-{bmax}  radius={self.sample_radius}",
-                cyan, 0.4, 1,
-            ))
+        # Line 3: per-ring stats (only when LEDs are placed).
+        if outer_bri_list or inner_bri_list:
+            parts = [f"ON={on_count} OFF={off_count}"]
+            o_ch = self._color_channels.get("outer_ring")
+            i_ch = self._color_channels.get("inner_ring")
+            if outer_bri_list:
+                ch_tag = f"[{o_ch}]" if o_ch else ""
+                parts.append(
+                    f"outer{ch_tag}: {int(min(outer_bri_list))}-"
+                    f"{int(max(outer_bri_list))}")
+            if inner_bri_list:
+                ch_tag = f"[{i_ch}]" if i_ch else ""
+                parts.append(
+                    f"inner{ch_tag}: {int(min(inner_bri_list))}-"
+                    f"{int(max(inner_bri_list))}")
+            parts.append(f"r={self.sample_radius}")
+            lines.append(("  ".join(parts), cyan, 0.4, 1))
 
         # Lines 4-5: help keys split into two short rows.
         label_mode = "bri" if self.show_brightness else "id"
         lines.append((
             f"[i]label={label_mode}  [t]hreshold  [d]cycle-thr  "
-            f"[+/-]adj  [b]ri-stats  [r]eset-stats  [/]radius",
+            f"[+/-]adj  [c]olor-ch  [b]ri-stats  [r]eset  [/]radius",
             gray_c, 0.35, 1,
         ))
         lines.append((
@@ -598,6 +654,22 @@ class CalibrationGUI:
             elif key == ord("["):
                 self.sample_radius = max(3, self.sample_radius - 1)
                 print(f"  Sample radius: {self.sample_radius}")
+            elif key == ord("c"):
+                if self._thr_keys:
+                    k = self._thr_keys[self._thr_select]
+                    cur = self._color_channels.get(k)
+                    # Cycle: None → R → G → B → None
+                    if cur is None:
+                        self._color_channels[k] = "R"
+                    elif cur == "R":
+                        self._color_channels[k] = "G"
+                    elif cur == "G":
+                        self._color_channels[k] = "B"
+                    else:
+                        self._color_channels.pop(k, None)
+                    new = self._color_channels.get(k, "gray")
+                    print(f"  {k} channel: {new}")
+                    self._reset_brightness_stats()
             elif key == ord("b"):
                 self._print_brightness_summary()
             elif key == ord("r"):
@@ -623,10 +695,13 @@ class CalibrationGUI:
                 "positions": self.positions.get(key, []),
                 "threshold": self.thresholds.get(key, DEFAULT_THRESHOLD),
             }
-        return {
+        d = {
             "groups": out_groups,
             "sample_radius": self.sample_radius,
         }
+        if self._color_channels:
+            d["color_channels"] = dict(self._color_channels)
+        return d
 
 
 # ── CLI ──────────────────────────────────────────────────────────────
@@ -680,8 +755,9 @@ def main():
         print("Error: use --flash or --submission, not both.")
         sys.exit(1)
 
-    # Select LED groups from lab preset.
+    # Select LED groups and default color channels from lab preset.
     groups = LAB_PRESETS.get(args.lab, LAB1_GROUPS)
+    default_channels = LAB_COLOR_CHANNELS.get(args.lab, {})
 
     # Map lab name to output binary name
     lab_output_names = {"lab1": "Lab_1", "lab2": "Lab_2", "lab3": "Lab_3"}
@@ -751,11 +827,13 @@ def main():
         gui = CalibrationGUI(sample_radius=args.sample_radius,
                              video_path=args.video,
                              preset=preset,
-                             groups=groups)
+                             groups=groups,
+                             color_channels=default_channels)
     else:
         gui = CalibrationGUI(args.camera, args.sample_radius,
                              preset=preset,
-                             groups=groups)
+                             groups=groups,
+                             color_channels=default_channels)
 
     if flash_binary_path:
         print(f"Flashing: {flash_binary_path}")
