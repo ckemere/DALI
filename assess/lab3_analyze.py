@@ -29,7 +29,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # =====================================================================
 
 MIN_FLASH_TRANSITIONS = 3
-STEADY_ON_MIN_FRAC = 0.65
 MIN_TICKING_CHANGES = 2
 N_LEDS = 12
 
@@ -58,8 +57,18 @@ def _no_data(detail: str = "") -> Dict[str, str]:
 
 
 # =====================================================================
-# Detection primitives
+# Detection primitives  (brightness-based, threshold-independent)
 # =====================================================================
+
+# Map ring name → brightness-list key in the frame dict.
+_BRI_KEY = {"outer": "outer_brightness", "inner": "inner_brightness"}
+
+# Below this mean brightness, no LED is considered active.
+MIN_ACTIVE_BRIGHTNESS = 20
+
+# Minimum brightness swing to count as a real on/off oscillation.
+MIN_FLASH_RANGE = 30
+
 
 def _frames_between(
     timeline: Sequence[Dict],
@@ -69,21 +78,34 @@ def _frames_between(
     return [f for f in timeline if t_start <= f["t"] <= t_end]
 
 
-def _on_fraction(frames: Sequence[Dict], ring: str, idx: int) -> float:
+def _mean_brightness(
+    frames: Sequence[Dict], ring: str, idx: int,
+) -> float:
     if not frames:
         return 0.0
-    return sum(1 for f in frames if f[ring][idx]) / len(frames)
+    bri_key = _BRI_KEY[ring]
+    return sum(f[bri_key][idx] for f in frames) / len(frames)
 
 
 def _count_transitions(
     frames: Sequence[Dict], ring: str, idx: int,
 ) -> int:
+    """Count midpoint crossings in the brightness time-series."""
     if len(frames) < 2:
         return 0
+    bri_key = _BRI_KEY[ring]
+    values = [f[bri_key][idx] for f in frames]
+    lo, hi = min(values), max(values)
+    if hi - lo < MIN_FLASH_RANGE:
+        return 0
+    mid = (lo + hi) / 2.0
     n = 0
-    for i in range(1, len(frames)):
-        if frames[i][ring][idx] != frames[i - 1][ring][idx]:
+    above = values[0] > mid
+    for v in values[1:]:
+        now_above = v > mid
+        if now_above != above:
             n += 1
+            above = now_above
     return n
 
 
@@ -93,6 +115,15 @@ def _is_flashing(
     idx: int,
     min_trans: int = MIN_FLASH_TRANSITIONS,
 ) -> bool:
+    """True if LED brightness oscillates with enough amplitude and
+    frequency.  Immune to threshold miscalibration and PWM dimming."""
+    if len(frames) < 4:
+        return False
+    bri_key = _BRI_KEY[ring]
+    values = [f[bri_key][idx] for f in frames]
+    hi = max(values)
+    if hi < MIN_ACTIVE_BRIGHTNESS:
+        return False
     return _count_transitions(frames, ring, idx) >= min_trans
 
 
@@ -100,9 +131,12 @@ def _is_steady_on(
     frames: Sequence[Dict],
     ring: str,
     idx: int,
-    min_frac: float = STEADY_ON_MIN_FRAC,
 ) -> bool:
-    return _on_fraction(frames, ring, idx) >= min_frac
+    """LED is bright (above background) and NOT flashing."""
+    mean_bri = _mean_brightness(frames, ring, idx)
+    if mean_bri < MIN_ACTIVE_BRIGHTNESS:
+        return False
+    return not _is_flashing(frames, ring, idx)
 
 
 def _dominant_position(
@@ -110,17 +144,21 @@ def _dominant_position(
     ring: str,
     n_leds: int = N_LEDS,
 ) -> Tuple[Optional[int], float]:
-    """LED with the highest on-fraction.  Works for both steady and
-    flashing LEDs (a 50% duty-cycle flasher still dominates if all
-    others are off)."""
+    """LED with the highest mean brightness.  Returns ``(index,
+    mean_brightness)`` or ``(None, brightness)`` if nothing is active."""
+    if not frames:
+        return None, 0.0
+    bri_key = _BRI_KEY[ring]
     best_idx: Optional[int] = None
-    best_frac = 0.0
+    best_mean = -1.0
     for i in range(n_leds):
-        frac = _on_fraction(frames, ring, i)
-        if frac > best_frac:
-            best_frac = frac
+        m = sum(f[bri_key][i] for f in frames) / len(frames)
+        if m > best_mean:
+            best_mean = m
             best_idx = i
-    return best_idx, best_frac
+    if best_mean < MIN_ACTIVE_BRIGHTNESS:
+        return None, best_mean
+    return best_idx, best_mean
 
 
 def _any_flashing(
@@ -160,8 +198,8 @@ def _detect_ticking(
     while t + window_s <= t_end + 0.01:
         win = _frames_between(frames, t, t + window_s)
         if win:
-            pos, frac = _dominant_position(win, ring, n_leds)
-            if pos is not None and frac > 0.1:
+            pos, bri = _dominant_position(win, ring, n_leds)
+            if pos is not None:
                 positions.append(pos)
                 times.append(t + window_s / 2)
         t += step_s
@@ -202,8 +240,8 @@ def _track_positions_after_presses(
         if not win:
             positions.append(None)
             continue
-        pos, frac = _dominant_position(win, ring, n_leds)
-        positions.append(pos if frac > 0.05 else None)
+        pos, _bri = _dominant_position(win, ring, n_leds)
+        positions.append(pos)
     return positions
 
 
@@ -377,17 +415,17 @@ class Lab3Analyzer:
         ticking, n_changes, avg_period = _detect_ticking(frames, "inner")
 
         # Check that outer ring has at least one LED active.
-        outer_pos, outer_frac = _dominant_position(frames[:30], "outer")
-        outer_active = outer_pos is not None and outer_frac > 0.3
+        outer_pos, outer_bri = _dominant_position(frames[:30], "outer")
+        outer_active = outer_pos is not None
 
         if ticking and outer_active:
             clock_runs = _pass(
                 f"inner ticks ({n_changes} changes), "
-                f"outer active at pos {outer_pos}")
+                f"outer active at pos {outer_pos} (bri={outer_bri:.0f})")
         elif ticking:
             clock_runs = _pass(
                 f"inner ticks ({n_changes} changes), "
-                f"outer not clearly active (frac={outer_frac:.2f})")
+                f"outer not clearly active (bri={outer_bri:.0f})")
         else:
             clock_runs = _fail(
                 f"inner not ticking ({n_changes} changes in "
@@ -622,12 +660,12 @@ class Lab3Analyzer:
 
             if inner_steady:
                 results["minute_steady_in_hour_set"] = _pass(
-                    f"inner[{inner_pos}] on_frac={_on_fraction(hs_entry, 'inner', inner_pos):.2f}")
+                    f"inner[{inner_pos}] bri={_mean_brightness(hs_entry, 'inner', inner_pos):.0f}")
             else:
                 inner_flash, _ = _any_flashing(hs_entry, "inner")
+                bri = _mean_brightness(hs_entry, 'inner', inner_pos) if inner_pos is not None else 0
                 results["minute_steady_in_hour_set"] = _fail(
-                    f"inner flashing={inner_flash}, "
-                    f"on_frac={_on_fraction(hs_entry, 'inner', inner_pos) if inner_pos is not None else 0:.2f}")
+                    f"inner flashing={inner_flash}, bri={bri:.0f}")
 
         # Clock frozen: inner ring position should not change during
         # the entire hour-set phase (1st long → 2nd long).
@@ -682,7 +720,7 @@ class Lab3Analyzer:
                 f"entry window too short ({len(ms_entry)} frames)")
         else:
             inner_flash, inner_flash_idx = _any_flashing(ms_entry, "inner")
-            outer_pos, outer_frac = _dominant_position(ms_entry, "outer")
+            outer_pos, outer_bri = _dominant_position(ms_entry, "outer")
             outer_steady = (
                 outer_pos is not None
                 and _is_steady_on(ms_entry, "outer", outer_pos)
@@ -705,7 +743,7 @@ class Lab3Analyzer:
 
             if outer_steady:
                 results["hour_steady_in_minute_set"] = _pass(
-                    f"outer[{outer_pos}] on_frac={_on_fraction(ms_entry, 'outer', outer_pos):.2f}")
+                    f"outer[{outer_pos}] bri={_mean_brightness(ms_entry, 'outer', outer_pos):.0f}")
             else:
                 outer_flash_chk, _ = _any_flashing(ms_entry, "outer")
                 results["hour_steady_in_minute_set"] = _fail(
