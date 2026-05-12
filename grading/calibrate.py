@@ -371,7 +371,8 @@ class CalibrationGUI:
     # ── overlay ─────────────────────────────────────────────────────
 
     # Height of the info panel appended below the video frame.
-    _PANEL_H = 80
+    _PANEL_H = 110
+    _LINE_H = 18  # vertical spacing between text lines in the panel
 
     def _draw(self, frame):
         display = frame.copy()
@@ -451,33 +452,52 @@ class CalibrationGUI:
             prompt_text = "All done! Press 's' to save"
 
         adjusting = self._thr_keys[self._thr_select] if self._thr_keys else ""
+
+        # Build panel lines: each is (text, color, scale, thickness).
+        white = (255, 255, 255)
+        cyan = (0, 255, 255)
+        gray_c = (200, 200, 200)
+        lines = []
+
+        # Line 1: prompt (larger).
+        lines.append((prompt_text, white, 0.55, 2))
+
+        # Line 2: thresholds.
         thr_text = "  ".join(
             f"{k}={self.thresholds[k]}" for k in self._thr_keys
         )
+        lines.append((f"thr: {thr_text}  [+/-]->{adjusting}", cyan, 0.4, 1))
+
+        # Line 3: live stats (only when LEDs are placed).
         if all_brightness:
             bmin, bmax = int(min(all_brightness)), int(max(all_brightness))
-            stats_text = (f"thr: {thr_text}  ON={on_count} OFF={off_count}  "
-                          f"range={bmin}-{bmax}  [+/-]->{adjusting}")
-        else:
-            stats_text = f"thr: {thr_text}  [+/-]->{adjusting}"
+            lines.append((
+                f"ON={on_count} OFF={off_count}  "
+                f"range={bmin}-{bmax}  radius={self.sample_radius}",
+                cyan, 0.4, 1,
+            ))
 
-        label_mode = "brightness" if self.show_brightness else "LED id"
-        help_text = (
-            f"[i]label={label_mode}  [t]hreshold [d]cycle-thr [+/-]adj "
-            f"[b]ri-stats [r]eset-stats  [/]radius={self.sample_radius}  "
-            f"drag=move  right-click=del  "
-            f"[u]ndo [space]pause [s]ave [q]uit"
-        )
+        # Lines 4-5: help keys split into two short rows.
+        label_mode = "bri" if self.show_brightness else "id"
+        lines.append((
+            f"[i]label={label_mode}  [t]hreshold  [d]cycle-thr  "
+            f"[+/-]adj  [b]ri-stats  [r]eset-stats  [/]radius",
+            gray_c, 0.35, 1,
+        ))
+        lines.append((
+            "drag=move  right-click=del  [u]ndo  [space]pause  [s]ave  [q]uit",
+            gray_c, 0.35, 1,
+        ))
 
         # Append a dark panel below the video frame for text.
+        panel_h = self._LINE_H * len(lines) + 10
         h, w = display.shape[:2]
-        panel = np.zeros((self._PANEL_H, w, 3), dtype=np.uint8)
-        cv2.putText(panel, prompt_text, (10, 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(panel, stats_text, (10, 45),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
-        cv2.putText(panel, help_text, (10, 68),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1)
+        panel = np.zeros((panel_h, w, 3), dtype=np.uint8)
+        y_pos = 0
+        for text, color, scale, thickness in lines:
+            y_pos += self._LINE_H
+            cv2.putText(panel, text, (10, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness)
         display = np.vstack((display, panel))
 
         return display
