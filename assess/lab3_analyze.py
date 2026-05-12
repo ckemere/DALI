@@ -254,26 +254,47 @@ class Lab3Analyzer:
     # ── alignment ───────────────────────────────────────────────────
 
     def _find_debug_off_edges(self) -> List[float]:
-        """Video times where the debug LED transitions solidly on → off."""
-        MIN_ON_FRAMES = 10
-        burst_start = None
-        burst_count = 0
-        edges: List[float] = []
+        """Video times where the debug LED finishes a programming cycle.
 
+        The XDS110 debug LED may blink multiple times during a single
+        flash (not a solid on), so we collect individual on→off edges
+        and then merge nearby ones (within ``MERGE_GAP_S``) into one
+        event per flash.  The merged edge time is the *last* off-edge
+        in each cluster.
+        """
+        MIN_ON_FRAMES = 10
+        MERGE_GAP_S = 3.0
+
+        # Step 1: collect raw on→off edges (filtering short glitches).
+        raw_edges: List[float] = []
+        burst_count = 0
         for f in self.timeline:
             if f["debug"]:
-                if burst_start is None:
-                    burst_start = f["t"]
                 burst_count += 1
             else:
                 if burst_count >= MIN_ON_FRAMES:
-                    edges.append(f["t"])
-                burst_start = None
+                    raw_edges.append(f["t"])
                 burst_count = 0
 
         if self.verbose:
-            print(f"  [analyzer] found {len(edges)} debug-off edge(s)")
-        return edges
+            print(f"  [analyzer] raw debug-off edges: {len(raw_edges)}  "
+                  f"times={[f'{t:.2f}' for t in raw_edges]}")
+
+        # Step 2: merge edges that are close together (same flash).
+        if not raw_edges:
+            return []
+        merged: List[float] = []
+        cluster_end = raw_edges[0]
+        for i in range(1, len(raw_edges)):
+            if raw_edges[i] - cluster_end > MERGE_GAP_S:
+                merged.append(cluster_end)
+            cluster_end = raw_edges[i]
+        merged.append(cluster_end)
+
+        if self.verbose:
+            print(f"  [analyzer] merged debug-off edges: {len(merged)}  "
+                  f"times={[f'{t:.2f}' for t in merged]}")
+        return merged
 
     def _build_anchors(
         self, seg_list: Sequence[Dict],
@@ -491,7 +512,8 @@ class Lab3Analyzer:
 
         stim_events = meta.get("stim_events")
         if not stim_events:
-            return self._full_cycle_no_data("no stim_events in metadata")
+            return self._full_cycle_no_data(
+                "no stim_events in metadata (re-capture with updated code)")
 
         vt = self._vt_fn("full_cycle")
 
