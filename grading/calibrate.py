@@ -412,8 +412,9 @@ class CalibrationGUI:
         cv2.putText(
             display,
             f"[i]label={label_mode}  [t]hreshold [d]cycle-thr [+/-]adj "
-            f"[b]ri-stats [r]eset-stats  drag=move  right-click=del  "
-            f"[u]ndo [f]reeze [s]ave [q]uit",
+            f"[b]ri-stats [r]eset-stats  [/]radius={self.sample_radius}  "
+            f"drag=move  right-click=del  "
+            f"[u]ndo [space]pause [s]ave [q]uit",
             (10, display.shape[0] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1,
         )
@@ -444,8 +445,9 @@ class CalibrationGUI:
         print("Mouse: left-click=place, drag=move, right-click=delete")
         print("Keys:  u=undo, i=toggle label (brightness/LED id),")
         print("       t=threshold view, d=cycle threshold (outer/inner/debug),")
-        print("       +/-=adjust selected threshold, b=brightness stats, r=reset stats,")
-        print("       f=freeze, s=save, q=quit\n")
+        print("       +/-=adjust selected threshold, [/]=adjust sample radius,")
+        print("       b=brightness stats, r=reset stats,")
+        print("       space=pause/resume, s=save, q=quit\n")
 
         while True:
             if self.frozen_frame is None:
@@ -509,13 +511,19 @@ class CalibrationGUI:
                 else:
                     self.debug_threshold = max(0, self.debug_threshold - 5)
                     print(f"  Debug threshold: {self.debug_threshold}")
-            elif key == ord("f"):
+            elif key == ord("f") or key == ord(" "):
                 if self.frozen_frame is None:
                     self.frozen_frame = frame.copy()
-                    print("  Frame frozen")
+                    print("  Frame paused")
                 else:
                     self.frozen_frame = None
-                    print("  Frame unfrozen")
+                    print("  Frame resumed")
+            elif key == ord("]"):
+                self.sample_radius = min(100, self.sample_radius + 1)
+                print(f"  Sample radius: {self.sample_radius}")
+            elif key == ord("["):
+                self.sample_radius = max(3, self.sample_radius - 1)
+                print(f"  Sample radius: {self.sample_radius}")
             elif key == ord("b"):
                 self._print_brightness_summary()
             elif key == ord("r"):
