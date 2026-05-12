@@ -112,7 +112,7 @@ class CalibrationGUI:
 
     @property
     def drag_threshold(self):
-        return max(self.drag_threshold_MIN, self.sample_radius + 5)
+        return max(self.DRAG_THRESHOLD_MIN, self.sample_radius + 5)
 
     def __init__(self, camera_device=0, sample_radius=DEFAULT_SAMPLE_RADIUS,
                  video_path=None, preset=None, groups=None):
@@ -370,6 +370,9 @@ class CalibrationGUI:
 
     # ── overlay ─────────────────────────────────────────────────────
 
+    # Height of the info panel appended below the video frame.
+    _PANEL_H = 80
+
     def _draw(self, frame):
         display = frame.copy()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -437,20 +440,16 @@ class CalibrationGUI:
                             (pos["x"] - 8, pos["y"] + 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, draw_color, 1)
 
-        # Status text: current group prompt.
+        # Build status/threshold/help text for the info panel.
         key, label, count, _, _ = self._group()
         placed = len(self.positions[key])
         if placed < count:
-            text = f"Click {label} LED {placed + 1}/{count}"
+            prompt_text = f"Click {label} LED {placed + 1}/{count}"
         elif not self._all_done():
-            text = "Group complete – moving to next..."
+            prompt_text = "Group complete - moving to next..."
         else:
-            text = "All done! Press 's' to save"
+            prompt_text = "All done! Press 's' to save"
 
-        cv2.putText(display, text, (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
-        # Threshold status line.
         adjusting = self._thr_keys[self._thr_select] if self._thr_keys else ""
         thr_text = "  ".join(
             f"{k}={self.thresholds[k]}" for k in self._thr_keys
@@ -461,19 +460,26 @@ class CalibrationGUI:
                           f"range={bmin}-{bmax}  [+/-]->{adjusting}")
         else:
             stats_text = f"thr: {thr_text}  [+/-]->{adjusting}"
-        cv2.putText(display, stats_text, (10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
         label_mode = "brightness" if self.show_brightness else "LED id"
-        cv2.putText(
-            display,
+        help_text = (
             f"[i]label={label_mode}  [t]hreshold [d]cycle-thr [+/-]adj "
             f"[b]ri-stats [r]eset-stats  [/]radius={self.sample_radius}  "
             f"drag=move  right-click=del  "
-            f"[u]ndo [space]pause [s]ave [q]uit",
-            (10, display.shape[0] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1,
+            f"[u]ndo [space]pause [s]ave [q]uit"
         )
+
+        # Append a dark panel below the video frame for text.
+        h, w = display.shape[:2]
+        panel = np.zeros((self._PANEL_H, w, 3), dtype=np.uint8)
+        cv2.putText(panel, prompt_text, (10, 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(panel, stats_text, (10, 45),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+        cv2.putText(panel, help_text, (10, 68),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1)
+        display = np.vstack((display, panel))
+
         return display
 
     # ── main loop ───────────────────────────────────────────────────
