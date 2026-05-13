@@ -44,31 +44,38 @@ class CanvasQuizDownloader:
         submissions = []
         page = 1
 
+        print(f"[DEBUG] Fetching from URL: {url}")
         pbar = tqdm(desc='Fetching submissions', unit=' pages', position=0)
         while True:
-            params = {'page': page, 'per_page': 100}
-            resp = self.session.get(url, params=params)
-            resp.raise_for_status()
+            try:
+                params = {'page': page, 'per_page': 100}
+                print(f"[DEBUG] Requesting page {page}...")
+                resp = self.session.get(url, params=params)
+                resp.raise_for_status()
 
-            data = resp.json()
-            print(f"\n[DEBUG] Page {page}: Got {len(data)} submissions")
-            print(f"[DEBUG] Response headers: X-Total-Count={resp.headers.get('X-Total-Count', 'N/A')}, X-Total-Pages={resp.headers.get('X-Total-Pages', 'N/A')}")
+                data = resp.json()
+                print(f"[DEBUG] Page {page}: Got {len(data)} submissions")
+                print(f"[DEBUG] Response headers: X-Total-Count={resp.headers.get('X-Total-Count', 'N/A')}, X-Total-Pages={resp.headers.get('X-Total-Pages', 'N/A')}")
 
-            if data:
-                # Show sample of what we're getting
-                first_submission = data[0]
-                user_id = first_submission.get('user', {}).get('id')
-                user_name = first_submission.get('user', {}).get('display_name')
-                attempt = first_submission.get('attempt')
-                print(f"[DEBUG] Sample: User {user_id} ({user_name}) - Attempt {attempt}")
+                if data:
+                    # Show sample of what we're getting
+                    first_submission = data[0]
+                    user_id = first_submission.get('user', {}).get('id')
+                    user_name = first_submission.get('user', {}).get('display_name')
+                    attempt = first_submission.get('attempt')
+                    print(f"[DEBUG] Sample: User {user_id} ({user_name}) - Attempt {attempt}")
 
-            if not data:
-                break
+                if not data:
+                    print(f"[DEBUG] Page {page} is empty, stopping")
+                    break
 
-            submissions.extend(data)
-            pbar.update(1)
-            pbar.set_postfix({'total': len(submissions)})
-            page += 1
+                submissions.extend(data)
+                pbar.update(1)
+                pbar.set_postfix({'total': len(submissions)})
+                page += 1
+            except Exception as e:
+                print(f"[DEBUG] Error on page {page}: {e}")
+                raise
 
         pbar.close()
         return submissions
@@ -188,9 +195,12 @@ def main():
         downloader.download_to_csv(args.course_id, args.quiz_id, args.output)
     except requests.exceptions.HTTPError as e:
         print(f"❌ API Error: {e}")
+        print(f"   Status Code: {e.response.status_code}")
         print(f"   Response: {e.response.text}")
     except Exception as e:
+        import traceback
         print(f"❌ Error: {e}")
+        traceback.print_exc()
 
 
 if __name__ == '__main__':
