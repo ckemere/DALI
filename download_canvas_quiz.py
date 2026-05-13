@@ -65,12 +65,24 @@ class CanvasQuizDownloader:
         pbar.close()
         return submissions
 
-    def get_user(self, user_id: int) -> Dict[str, Any]:
-        """Fetch user info by ID."""
-        url = urljoin(self.base_url, f'/api/v1/users/{user_id}')
-        resp = self.session.get(url)
-        resp.raise_for_status()
-        return resp.json()
+    def load_user_mapping(self, mapping_file: str) -> Dict[int, Dict[str, str]]:
+        """Load user ID to name/email mapping from CSV file.
+
+        Expected CSV format: user_id,name,email (with header row)
+        """
+        user_map = {}
+        with open(mapping_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    user_id = int(row['user_id'])
+                    user_map[user_id] = {
+                        'name': row.get('name', ''),
+                        'email': row.get('email', '')
+                    }
+                except (ValueError, KeyError) as e:
+                    print(f"Warning: Skipping row {row}: {e}")
+        return user_map
 
     def get_quiz_submission_questions(self, quiz_submission_id: int) -> List[Dict[str, Any]]:
         """Fetch questions and answers for a specific quiz submission."""
@@ -81,8 +93,15 @@ class CanvasQuizDownloader:
         # Response is wrapped in {'quiz_submission_questions': [...]}
         return data.get('quiz_submission_questions', [])
 
-    def download_to_csv(self, course_id: int, quiz_id: int, output_file: str):
+    def download_to_csv(self, course_id: int, quiz_id: int, output_file: str, user_mapping_file: str = None):
         """Download quiz submissions and save to CSV."""
+        # Load user mapping if provided
+        user_map = {}
+        if user_mapping_file:
+            print(f"Loading user mapping from {user_mapping_file}...")
+            user_map = self.load_user_mapping(user_mapping_file)
+            print(f"Loaded {len(user_map)} users")
+
         print(f"Fetching quiz submissions...")
         submissions = self.get_quiz_submissions(course_id, quiz_id)
 
@@ -107,14 +126,12 @@ class CanvasQuizDownloader:
             submission_id = submission.get('id')
             user_id = submission.get('user_id')
 
-            # Fetch user info
-            try:
-                user_info = self.get_user(user_id)
-                user_name = user_info.get('name')
-                user_email = user_info.get('login_id')
-            except Exception as e:
-                print(f"Warning: Could not fetch user info for user {user_id}: {e}")
-                user_name = f"User {user_id}"
+            # Get user info from mapping
+            if user_map and user_id in user_map:
+                user_name = user_map[user_id]['name']
+                user_email = user_map[user_id]['email']
+            else:
+                user_name = f"User {user_id}" if not user_map else ""
                 user_email = ""
 
             # Fetch submission questions and answers
@@ -165,6 +182,7 @@ def main():
     parser.add_argument('--token', default=os.getenv('CANVAS_API_TOKEN'), help='Canvas API token (env: CANVAS_API_TOKEN)')
     parser.add_argument('--course-id', type=int, default=os.getenv('COURSE_ID'), help='Course ID (env: COURSE_ID)')
     parser.add_argument('--quiz-id', type=int, default=os.getenv('CANVAS_QUIZ_ID'), help='Quiz ID (env: CANVAS_QUIZ_ID)')
+    parser.add_argument('--user-mapping', help='CSV file with user_id,name,email mapping (from gradebook)')
     parser.add_argument('--output', default='quiz_answers.csv', help='Output CSV file (default: quiz_answers.csv)')
 
     args = parser.parse_args()
@@ -180,7 +198,7 @@ def main():
 
     try:
         downloader = CanvasQuizDownloader(args.canvas_url, args.token)
-        downloader.download_to_csv(args.course_id, args.quiz_id, args.output)
+        downloader.download_to_csv(args.course_id, args.quiz_id, args.output, args.user_mapping)
     except requests.exceptions.HTTPError as e:
         print(f"❌ API Error: {e}")
         print(f"   Status Code: {e.response.status_code}")
