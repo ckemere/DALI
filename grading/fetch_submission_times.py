@@ -39,13 +39,15 @@ def canvas_get_paginated(endpoint: str) -> list[dict]:
     url = f"{CANVAS_BASE_URL}/api/v1/{endpoint}"
     headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
     results = []
+    params = {"per_page": 100}
 
     while url:
-        resp = requests.get(url, headers=headers, params={"per_page": 100}, timeout=30)
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
         resp.raise_for_status()
         results.extend(resp.json())
         # Canvas pagination: follow the "next" link
         url = None
+        params = None  # next URL already contains all query params
         if "Link" in resp.headers:
             for part in resp.headers["Link"].split(","):
                 if 'rel="next"' in part:
