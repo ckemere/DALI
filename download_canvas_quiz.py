@@ -56,7 +56,7 @@ class CanvasQuizDownloader:
 
         pbar = tqdm(desc='Fetching submissions', unit=' pages', position=0)
         while True:
-            params = {'page': page, 'per_page': 100}
+            params = {'page': page, 'per_page': 100, 'include': 'submission_data'}
             resp = self.session.get(url, params=params)
             resp.raise_for_status()
 
