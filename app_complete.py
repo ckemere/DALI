@@ -764,8 +764,12 @@ def canvas_api_request(endpoint, method="GET", data=None, files=None):
         # Fetch all pages (Canvas paginates list endpoints via Link headers)
         results = []
         next_url = url
+        first = True
         while next_url:
-            r = requests.get(next_url, headers=headers, timeout=30)
+            r = requests.get(next_url, headers=headers,
+                             params={"per_page": 100} if first else None,
+                             timeout=30)
+            first = False
             r.raise_for_status()
             body = r.json()
             if isinstance(body, list):
