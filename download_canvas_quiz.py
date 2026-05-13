@@ -54,15 +54,23 @@ class CanvasQuizDownloader:
                 resp.raise_for_status()
 
                 data = resp.json()
-                print(f"[DEBUG] Page {page}: Got {len(data)} submissions")
+                print(f"[DEBUG] Page {page}: Data type = {type(data)}")
                 print(f"[DEBUG] Response headers: X-Total-Count={resp.headers.get('X-Total-Count', 'N/A')}, X-Total-Pages={resp.headers.get('X-Total-Pages', 'N/A')}")
+                print(f"[DEBUG] Full response data: {data}")
 
                 if data:
-                    # Show sample of what we're getting
-                    first_submission = data[0]
-                    user_id = first_submission.get('user', {}).get('id')
-                    user_name = first_submission.get('user', {}).get('display_name')
-                    attempt = first_submission.get('attempt')
+                    # Handle both list and dict responses
+                    if isinstance(data, list):
+                        print(f"[DEBUG] Got list with {len(data)} submissions")
+                        first_submission = data[0]
+                    elif isinstance(data, dict):
+                        print(f"[DEBUG] Got dict with keys: {list(data.keys())}")
+                        # If it's a dict, maybe it contains submissions under a key?
+                        first_submission = data
+
+                    user_id = first_submission.get('user', {}).get('id') if isinstance(first_submission, dict) else None
+                    user_name = first_submission.get('user', {}).get('display_name') if isinstance(first_submission, dict) else None
+                    attempt = first_submission.get('attempt') if isinstance(first_submission, dict) else None
                     print(f"[DEBUG] Sample: User {user_id} ({user_name}) - Attempt {attempt}")
 
                 if not data:
