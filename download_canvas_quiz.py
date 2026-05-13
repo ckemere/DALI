@@ -95,9 +95,21 @@ class CanvasQuizDownloader:
             print("No submissions found.")
             return
 
+        # Keep only the latest attempt per student (quizzes return all attempts)
+        latest_by_user = {}
+        for submission in submissions:
+            user_id = submission.get('user_id')
+            attempt = submission.get('attempt', 0)
+
+            if user_id not in latest_by_user or attempt > latest_by_user[user_id]['attempt']:
+                latest_by_user[user_id] = submission
+
+        latest_submissions = list(latest_by_user.values())
+        print(f"Found {len(submissions)} total submissions, keeping {len(latest_submissions)} latest attempts")
+
         # Flatten data for CSV
         rows = []
-        for submission in tqdm(submissions, desc='Processing submissions', unit=' submissions'):
+        for submission in tqdm(latest_submissions, desc='Processing submissions', unit=' submissions'):
             user = submission.get('user', {})
             base_row = {
                 'Student ID': user.get('id'),
@@ -130,7 +142,7 @@ class CanvasQuizDownloader:
             writer.writeheader()
             writer.writerows(rows)
 
-        print(f"✓ Downloaded {len(submissions)} submissions to {output_file}")
+        print(f"✓ Downloaded {len(latest_submissions)} latest attempts to {output_file}")
 
 
 def main():
