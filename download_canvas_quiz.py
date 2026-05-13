@@ -73,7 +73,24 @@ class CanvasQuizDownloader:
             page += 1
 
         pbar.close()
-        return submissions
+
+        # Fetch individual submissions with include=submission_data to get answers
+        print("Fetching submission data with answers...")
+        full_submissions = []
+        for submission in tqdm(submissions, desc='Fetching submission details', unit=' submissions'):
+            submission_id = submission.get('id')
+            url = urljoin(self.base_url, f'/api/v1/quiz_submissions/{submission_id}')
+            params = {'include': 'submission_data'}
+            try:
+                resp = self.session.get(url, params=params)
+                resp.raise_for_status()
+                full_submission = resp.json()
+                full_submissions.append(full_submission)
+            except Exception as e:
+                print(f"Warning: Could not fetch submission data for {submission_id}: {e}")
+                full_submissions.append(submission)
+
+        return full_submissions
 
     def load_user_mapping(self, mapping_file: str) -> Dict[int, Dict[str, str]]:
         """Load user ID to name/email mapping from CSV file.
@@ -144,15 +161,6 @@ class CanvasQuizDownloader:
                 user_name = f"User {user_id}" if not user_map else ""
                 user_email = ""
 
-            # Fetch submission questions and answers
-            try:
-                questions = self.get_quiz_submission_questions(submission_id)
-                if not questions:
-                    print(f"[DEBUG] No questions returned for submission {submission_id}")
-            except Exception as e:
-                print(f"Warning: Could not fetch questions for submission {submission_id}: {e}")
-                questions = []
-
             base_row = {
                 'Student ID': user_id,
                 'Student Name': user_name,
@@ -162,18 +170,17 @@ class CanvasQuizDownloader:
                 'Attempt': submission.get('attempt'),
             }
 
-            # Add answers for each question
-            if questions:
-                print(f"[DEBUG] Submission {submission_id}: Found {len(questions)} questions")
-                if questions:
-                    print(f"[DEBUG] Sample question: {questions[0]}")
+            # Add answers from submission_data
+            submission_data = submission.get('submission_data', [])
+            if submission_data:
+                print(f"[DEBUG] Submission {submission_id}: Found {len(submission_data)} answers")
+                if submission_data:
+                    print(f"[DEBUG] Sample answer: {submission_data[0]}")
 
-            for question in questions:
-                q_id = question.get('id')
-                q_text = question.get('question_text', f'Question {q_id}')
-                # Try different possible field names for the answer
-                answer = question.get('user_answer') or question.get('answer') or question.get('text') or ''
-                base_row[f'Q{q_id}: {q_text[:50]}'] = answer
+            for answer_data in submission_data:
+                q_id = answer_data.get('question_id')
+                answer = answer_data.get('text') or answer_data.get('answer') or ''
+                base_row[f'Q{q_id}: Answer'] = answer
 
             rows.append(base_row)
 
