@@ -65,32 +65,24 @@ class CanvasQuizDownloader:
         pbar.close()
         return submissions
 
-    def get_quiz_questions(self, course_id: int, quiz_id: int) -> List[Dict[str, Any]]:
-        """Fetch quiz questions to map question IDs to text."""
-        url = urljoin(self.base_url, f'/api/v1/courses/{course_id}/quizzes/{quiz_id}/questions')
-        questions = []
-        page = 1
+    def get_user(self, user_id: int) -> Dict[str, Any]:
+        """Fetch user info by ID."""
+        url = urljoin(self.base_url, f'/api/v1/users/{user_id}')
+        resp = self.session.get(url)
+        resp.raise_for_status()
+        return resp.json()
 
-        while True:
-            params = {'page': page, 'per_page': 100}
-            resp = self.session.get(url, params=params)
-            resp.raise_for_status()
-
-            data = resp.json()
-            if not data:
-                break
-
-            questions.extend(data)
-            page += 1
-
-        return questions
+    def get_quiz_submission_questions(self, quiz_submission_id: int) -> List[Dict[str, Any]]:
+        """Fetch questions and answers for a specific quiz submission."""
+        url = urljoin(self.base_url, f'/api/v1/quiz_submissions/{quiz_submission_id}/questions')
+        resp = self.session.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        # Response is wrapped in {'quiz_submission_questions': [...]}
+        return data.get('quiz_submission_questions', [])
 
     def download_to_csv(self, course_id: int, quiz_id: int, output_file: str):
         """Download quiz submissions and save to CSV."""
-        print(f"Fetching quiz questions...")
-        questions = self.get_quiz_questions(course_id, quiz_id)
-        question_map = {q['id']: q['question_text'] for q in questions}
-
         print(f"Fetching quiz submissions...")
         submissions = self.get_quiz_submissions(course_id, quiz_id)
 
@@ -112,21 +104,41 @@ class CanvasQuizDownloader:
         # Flatten data for CSV
         rows = []
         for submission in tqdm(latest_submissions, desc='Processing submissions', unit=' submissions'):
-            user = submission.get('user', {})
+            submission_id = submission.get('id')
+            user_id = submission.get('user_id')
+
+            # Fetch user info
+            try:
+                user_info = self.get_user(user_id)
+                user_name = user_info.get('name')
+                user_email = user_info.get('login_id')
+            except Exception as e:
+                print(f"Warning: Could not fetch user info for user {user_id}: {e}")
+                user_name = f"User {user_id}"
+                user_email = ""
+
+            # Fetch submission questions and answers
+            try:
+                questions = self.get_quiz_submission_questions(submission_id)
+            except Exception as e:
+                print(f"Warning: Could not fetch questions for submission {submission_id}: {e}")
+                questions = []
+
             base_row = {
-                'Student ID': user.get('id'),
-                'Student Name': user.get('display_name'),
-                'Email': user.get('login_id'),
+                'Student ID': user_id,
+                'Student Name': user_name,
+                'Email': user_email,
                 'Score': submission.get('score'),
                 'Finished At': submission.get('finished_at'),
                 'Attempt': submission.get('attempt'),
             }
 
             # Add answers for each question
-            for answer in submission.get('submission_data', []):
-                q_id = answer.get('question_id')
-                question_text = question_map.get(q_id, f'Question {q_id}')
-                base_row[f'Q{q_id}: {question_text[:50]}'] = answer.get('text')
+            for question in questions:
+                q_id = question.get('id')
+                q_text = question.get('question_text', f'Question {q_id}')
+                answer = question.get('user_answer', '')
+                base_row[f'Q{q_id}: {q_text[:50]}'] = answer
 
             rows.append(base_row)
 
