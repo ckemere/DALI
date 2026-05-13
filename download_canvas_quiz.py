@@ -6,17 +6,17 @@ Usage:
     python download_canvas_quiz.py --canvas-url <url> --token <token> --course-id <id> --quiz-id <id> --output <file>
 
 Environment variables:
-    CANVAS_URL        Canvas instance URL
-    CANVAS_TOKEN      Canvas API token
-    CANVAS_COURSE_ID  Course ID
-    CANVAS_QUIZ_ID    Quiz ID
+    CANVAS_URL           Canvas instance URL
+    CANVAS_API_TOKEN     Canvas API token
+    CANVAS_COURSE_ID     Course ID
+    CANVAS_QUIZ_ID       Quiz ID
 
 Example with CLI args:
     python download_canvas_quiz.py --canvas-url https://canvas.instructure.com --token your_api_token --course-id 12345 --quiz-id 67890 --output lab8_answers.csv
 
 Example with env vars:
     export CANVAS_URL=https://canvas.instructure.com
-    export CANVAS_TOKEN=your_api_token
+    export CANVAS_API_TOKEN=your_api_token
     export CANVAS_COURSE_ID=12345
     export CANVAS_QUIZ_ID=67890
     python download_canvas_quiz.py --output lab8_answers.csv
@@ -130,7 +130,7 @@ class CanvasQuizDownloader:
 def main():
     parser = argparse.ArgumentParser(description='Download Canvas quiz submissions to CSV')
     parser.add_argument('--canvas-url', default=os.getenv('CANVAS_URL'), help='Canvas instance URL (env: CANVAS_URL)')
-    parser.add_argument('--token', default=os.getenv('CANVAS_TOKEN'), help='Canvas API token (env: CANVAS_TOKEN)')
+    parser.add_argument('--token', default=os.getenv('CANVAS_API_TOKEN'), help='Canvas API token (env: CANVAS_API_TOKEN)')
     parser.add_argument('--course-id', type=int, default=os.getenv('CANVAS_COURSE_ID'), help='Course ID (env: CANVAS_COURSE_ID)')
     parser.add_argument('--quiz-id', type=int, default=os.getenv('CANVAS_QUIZ_ID'), help='Quiz ID (env: CANVAS_QUIZ_ID)')
     parser.add_argument('--output', default='quiz_answers.csv', help='Output CSV file (default: quiz_answers.csv)')
@@ -140,7 +140,7 @@ def main():
     if not args.canvas_url:
         parser.error('--canvas-url required (or set CANVAS_URL)')
     if not args.token:
-        parser.error('--token required (or set CANVAS_TOKEN)')
+        parser.error('--token required (or set CANVAS_API_TOKEN)')
     if not args.course_id:
         parser.error('--course-id required (or set CANVAS_COURSE_ID)')
     if not args.quiz_id:
