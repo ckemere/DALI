@@ -44,46 +44,23 @@ class CanvasQuizDownloader:
         submissions = []
         page = 1
 
-        print(f"[DEBUG] Fetching from URL: {url}")
         pbar = tqdm(desc='Fetching submissions', unit=' pages', position=0)
         while True:
-            try:
-                params = {'page': page, 'per_page': 100}
-                print(f"[DEBUG] Requesting page {page}...")
-                resp = self.session.get(url, params=params)
-                resp.raise_for_status()
+            params = {'page': page, 'per_page': 100}
+            resp = self.session.get(url, params=params)
+            resp.raise_for_status()
 
-                data = resp.json()
-                print(f"[DEBUG] Page {page}: Data type = {type(data)}")
-                print(f"[DEBUG] Response headers: X-Total-Count={resp.headers.get('X-Total-Count', 'N/A')}, X-Total-Pages={resp.headers.get('X-Total-Pages', 'N/A')}")
-                print(f"[DEBUG] Full response data: {data}")
+            data = resp.json()
+            # Quiz submissions API wraps data in {'quiz_submissions': [...]}
+            quiz_submissions = data.get('quiz_submissions', [])
 
-                if data:
-                    # Handle both list and dict responses
-                    if isinstance(data, list):
-                        print(f"[DEBUG] Got list with {len(data)} submissions")
-                        first_submission = data[0]
-                    elif isinstance(data, dict):
-                        print(f"[DEBUG] Got dict with keys: {list(data.keys())}")
-                        # If it's a dict, maybe it contains submissions under a key?
-                        first_submission = data
+            if not quiz_submissions:
+                break
 
-                    user_id = first_submission.get('user', {}).get('id') if isinstance(first_submission, dict) else None
-                    user_name = first_submission.get('user', {}).get('display_name') if isinstance(first_submission, dict) else None
-                    attempt = first_submission.get('attempt') if isinstance(first_submission, dict) else None
-                    print(f"[DEBUG] Sample: User {user_id} ({user_name}) - Attempt {attempt}")
-
-                if not data:
-                    print(f"[DEBUG] Page {page} is empty, stopping")
-                    break
-
-                submissions.extend(data)
-                pbar.update(1)
-                pbar.set_postfix({'total': len(submissions)})
-                page += 1
-            except Exception as e:
-                print(f"[DEBUG] Error on page {page}: {e}")
-                raise
+            submissions.extend(quiz_submissions)
+            pbar.update(1)
+            pbar.set_postfix({'total': len(submissions)})
+            page += 1
 
         pbar.close()
         return submissions
@@ -121,25 +98,16 @@ class CanvasQuizDownloader:
             print("No submissions found.")
             return
 
-        # Keep only the latest attempt per student (quizzes return all attempts)
+        # Keep only the latest attempt per student
         latest_by_user = {}
-        attempt_counts = {}
         for submission in submissions:
             user_id = submission.get('user_id')
             attempt = submission.get('attempt', 0)
-            attempt_counts[user_id] = attempt_counts.get(user_id, 0) + 1
 
             if user_id not in latest_by_user or attempt > latest_by_user[user_id]['attempt']:
                 latest_by_user[user_id] = submission
 
         latest_submissions = list(latest_by_user.values())
-        print(f"\n[DEBUG] Found {len(submissions)} total submissions, keeping {len(latest_submissions)} latest attempts")
-        print(f"[DEBUG] Unique students: {len(latest_by_user)}")
-
-        # Show attempt distribution
-        max_attempts = max(attempt_counts.values()) if attempt_counts else 0
-        avg_attempts = len(submissions) / len(latest_by_user) if latest_by_user else 0
-        print(f"[DEBUG] Average attempts per student: {avg_attempts:.1f}, Max attempts: {max_attempts}")
 
         # Flatten data for CSV
         rows = []
