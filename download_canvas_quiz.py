@@ -51,6 +51,17 @@ class CanvasQuizDownloader:
             resp.raise_for_status()
 
             data = resp.json()
+            print(f"\n[DEBUG] Page {page}: Got {len(data)} submissions")
+            print(f"[DEBUG] Response headers: X-Total-Count={resp.headers.get('X-Total-Count', 'N/A')}, X-Total-Pages={resp.headers.get('X-Total-Pages', 'N/A')}")
+
+            if data:
+                # Show sample of what we're getting
+                first_submission = data[0]
+                user_id = first_submission.get('user', {}).get('id')
+                user_name = first_submission.get('user', {}).get('display_name')
+                attempt = first_submission.get('attempt')
+                print(f"[DEBUG] Sample: User {user_id} ({user_name}) - Attempt {attempt}")
+
             if not data:
                 break
 
@@ -97,15 +108,23 @@ class CanvasQuizDownloader:
 
         # Keep only the latest attempt per student (quizzes return all attempts)
         latest_by_user = {}
+        attempt_counts = {}
         for submission in submissions:
             user_id = submission.get('user_id')
             attempt = submission.get('attempt', 0)
+            attempt_counts[user_id] = attempt_counts.get(user_id, 0) + 1
 
             if user_id not in latest_by_user or attempt > latest_by_user[user_id]['attempt']:
                 latest_by_user[user_id] = submission
 
         latest_submissions = list(latest_by_user.values())
-        print(f"Found {len(submissions)} total submissions, keeping {len(latest_submissions)} latest attempts")
+        print(f"\n[DEBUG] Found {len(submissions)} total submissions, keeping {len(latest_submissions)} latest attempts")
+        print(f"[DEBUG] Unique students: {len(latest_by_user)}")
+
+        # Show attempt distribution
+        max_attempts = max(attempt_counts.values()) if attempt_counts else 0
+        avg_attempts = len(submissions) / len(latest_by_user) if latest_by_user else 0
+        print(f"[DEBUG] Average attempts per student: {avg_attempts:.1f}, Max attempts: {max_attempts}")
 
         # Flatten data for CSV
         rows = []
