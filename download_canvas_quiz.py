@@ -147,6 +147,8 @@ class CanvasQuizDownloader:
             # Fetch submission questions and answers
             try:
                 questions = self.get_quiz_submission_questions(submission_id)
+                if not questions:
+                    print(f"[DEBUG] No questions returned for submission {submission_id}")
             except Exception as e:
                 print(f"Warning: Could not fetch questions for submission {submission_id}: {e}")
                 questions = []
@@ -161,10 +163,16 @@ class CanvasQuizDownloader:
             }
 
             # Add answers for each question
+            if questions:
+                print(f"[DEBUG] Submission {submission_id}: Found {len(questions)} questions")
+                if questions:
+                    print(f"[DEBUG] Sample question: {questions[0]}")
+
             for question in questions:
                 q_id = question.get('id')
                 q_text = question.get('question_text', f'Question {q_id}')
-                answer = question.get('user_answer', '')
+                # Try different possible field names for the answer
+                answer = question.get('user_answer') or question.get('answer') or question.get('text') or ''
                 base_row[f'Q{q_id}: {q_text[:50]}'] = answer
 
             rows.append(base_row)
