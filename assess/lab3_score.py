@@ -27,7 +27,6 @@ from typing import Dict
 VIDEO_RUBRIC_ITEMS = [
     # -- Segment 1 (baseline): clock runs normally --------------------
     "normal_clock_runs",
-    "normal_clock_timing_1hz",
 
     # -- Segment 2 (debounce_reject): glitch ignored ------------------
     "debounce_rejects_glitch",
@@ -103,7 +102,6 @@ VIDEO_RUBRIC_DESCRIPTIONS: Dict[str, str] = {
 
 VIDEO_RUBRIC_POINTS: Dict[str, int] = {
     "normal_clock_runs":                    2,
-    "normal_clock_timing_1hz":              2,
 
     "debounce_rejects_glitch":              2,
 
