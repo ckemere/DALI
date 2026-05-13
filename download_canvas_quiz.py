@@ -3,7 +3,7 @@
 Download Canvas quiz submissions to CSV.
 
 Usage:
-    python download_canvas_quiz.py --canvas-url <url> --token <token> --course-id <id> --quiz-id <id> --output <file>
+    python download_canvas_quiz.py --canvas-url <url> --token <token> --course-id <id> --quiz-id <id> --user-mapping <csv> --output <file>
 
 Environment variables:
     CANVAS_URL       Canvas instance URL
@@ -11,15 +11,25 @@ Environment variables:
     COURSE_ID        Course ID
     CANVAS_QUIZ_ID   Quiz ID
 
-Example with CLI args:
-    python download_canvas_quiz.py --canvas-url https://canvas.instructure.com --token your_api_token --course-id 12345 --quiz-id 67890 --output lab8_answers.csv
+User Mapping CSV:
+    Export the gradebook as CSV with columns: user_id, name, email
+    This file is used to match student names/emails to quiz submissions.
+
+Example with user mapping:
+    python download_canvas_quiz.py \
+      --canvas-url https://canvas.rice.edu \
+      --token your_api_token \
+      --course-id 12345 \
+      --quiz-id 67890 \
+      --user-mapping gradebook.csv \
+      --output lab8_answers.csv
 
 Example with env vars:
-    export CANVAS_URL=https://canvas.instructure.com
+    export CANVAS_URL=https://canvas.rice.edu
     export CANVAS_API_TOKEN=your_api_token
     export COURSE_ID=12345
     export CANVAS_QUIZ_ID=67890
-    python download_canvas_quiz.py --output lab8_answers.csv
+    python download_canvas_quiz.py --user-mapping gradebook.csv --output lab8_answers.csv
 """
 
 import argparse
