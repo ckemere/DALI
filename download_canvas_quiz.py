@@ -28,6 +28,7 @@ import os
 import requests
 from typing import List, Dict, Any
 from urllib.parse import urljoin
+from tqdm import tqdm
 
 
 class CanvasQuizDownloader:
@@ -43,6 +44,7 @@ class CanvasQuizDownloader:
         submissions = []
         page = 1
 
+        pbar = tqdm(desc='Fetching submissions', unit=' pages', position=0)
         while True:
             params = {'page': page, 'per_page': 100}
             resp = self.session.get(url, params=params)
@@ -53,8 +55,11 @@ class CanvasQuizDownloader:
                 break
 
             submissions.extend(data)
+            pbar.update(1)
+            pbar.set_postfix({'total': len(submissions)})
             page += 1
 
+        pbar.close()
         return submissions
 
     def get_quiz_questions(self, course_id: int, quiz_id: int) -> List[Dict[str, Any]]:
@@ -92,7 +97,7 @@ class CanvasQuizDownloader:
 
         # Flatten data for CSV
         rows = []
-        for submission in submissions:
+        for submission in tqdm(submissions, desc='Processing submissions', unit=' submissions'):
             user = submission.get('user', {})
             base_row = {
                 'Student ID': user.get('id'),
@@ -119,6 +124,7 @@ class CanvasQuizDownloader:
                     fieldnames.append(key)
 
         # Write CSV
+        print(f"Writing to {output_file}...")
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
